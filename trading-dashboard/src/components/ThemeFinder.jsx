@@ -331,9 +331,10 @@ function SparkRank({ rankPoints }) {
 // Stock-level relative strength drill-down sub-table.
 // Primary data: Finviz merged nodes (themes + sectors), already in tickerPerf.
 // Fallback: Yahoo Finance via Vite proxy for any tickers absent from both Finviz maps.
-function StockDrillDown({ theme, tickerPerf, sortBy, hoveredTicker, setHoveredTicker }) {
+function StockDrillDown({ theme, tickerPerf, sortBy }) {
   const [extraPerf, setExtraPerf] = useState({});
   const [fetchingTickers, setFetchingTickers] = useState(new Set());
+  const [hoveredTicker, setHoveredTicker] = useState(null);
 
   useEffect(() => {
     const missing = theme.tickers.filter(
@@ -465,8 +466,8 @@ function StockDrillDown({ theme, tickerPerf, sortBy, hoveredTicker, setHoveredTi
   );
 }
 
-// Shared leading columns (chevron, rank, theme/sector link, RS badge, description, tickers)
-function LeadingCells({ rank, theme, hoveredTicker, setHoveredTicker, mode, expanded = false, onExpand = () => {}, rsLeaderCount = null }) {
+// Shared leading columns (chevron, rank, theme/sector link, description)
+function LeadingCells({ rank, theme, expanded = false, onExpand = () => {} }) {
   return (
     <>
       <td className="py-3 pr-3 font-mono text-xs">
@@ -482,41 +483,10 @@ function LeadingCells({ rank, theme, hoveredTicker, setHoveredTicker, mode, expa
         </div>
       </td>
       <td className="py-3 pr-4 font-medium">
-        <div className="flex items-center gap-2 flex-wrap">
-          <span>{theme.displayName}</span>
-          {rsLeaderCount != null && (
-            <span
-              className="text-xs text-gray-500 font-mono whitespace-nowrap"
-              title="Tickers with positive composite RS vs SPY"
-            >
-              {rsLeaderCount}/{theme.tickers.length} ▲
-            </span>
-          )}
-        </div>
+        <span>{theme.displayName}</span>
       </td>
       <td className="py-3 pr-4 text-gray-400 text-xs hidden md:table-cell">
         {theme.description}
-      </td>
-      <td className="py-3 pr-4 hidden lg:table-cell">
-        <div className="flex flex-wrap gap-1">
-          {theme.tickers.map((ticker) => (
-            <a
-              key={ticker}
-              href={`https://www.tradingview.com/chart/?symbol=${ticker}`}
-              target="_blank"
-              rel="noopener noreferrer"
-              onMouseEnter={() => setHoveredTicker(ticker)}
-              onMouseLeave={() => setHoveredTicker(null)}
-              className={`text-xs font-mono px-1.5 py-0.5 rounded transition-colors ${
-                hoveredTicker === ticker
-                  ? 'bg-accent text-white ring-1 ring-accent'
-                  : 'bg-secondary text-gray-300 hover:bg-accent hover:text-white'
-              }`}
-            >
-              {ticker}
-            </a>
-          ))}
-        </div>
       </td>
     </>
   );
@@ -593,12 +563,6 @@ const ThemeFinder = ({ mode = 'themes' }) => {
     setExpandedThemeId((prev) => (prev === themeId ? null : themeId));
   }, []);
 
-  // Count tickers outperforming SPY on composite RS — returns null if data not yet loaded
-  const getRsLeaderCount = (theme) => {
-    if (!tickerPerf.w1) return null;
-    return theme.tickers.filter((ticker) => computeCompositeRS(ticker, tickerPerf) > 0).length;
-  };
-
   const sortedBy = (key) =>
     [...themes]
       .sort((a, b) => {
@@ -667,8 +631,6 @@ const ThemeFinder = ({ mode = 'themes' }) => {
               theme={theme}
               tickerPerf={tickerPerf}
               sortBy={sortBy}
-              hoveredTicker={hoveredTicker}
-              setHoveredTicker={setHoveredTicker}
             />
           </div>
         </td>
@@ -737,6 +699,7 @@ const ThemeFinder = ({ mode = 'themes' }) => {
               >− {GOLDEN_TIMEFRAMES[GOLDEN_TIMEFRAMES.length - 1]?.label}</button>
             </div>
           )}
+          <span className="text-xs text-gray-500">Data is delayed 15 mins</span>
           <button
             onClick={fetchData}
             disabled={loading}
@@ -789,7 +752,7 @@ const ThemeFinder = ({ mode = 'themes' }) => {
                     <th className="text-left py-2 pr-3 w-8">#</th>
                     <th className="text-left py-2 pr-4">{Noun}</th>
                     <th className="text-left py-2 pr-4 hidden md:table-cell">Description</th>
-                    <th className="text-left py-2 pr-4 hidden lg:table-cell">Tickers</th>
+
                     <th className="text-left py-2 pr-4 hidden lg:table-cell">Trend</th>
                     {TIMEFRAMES.map((tf) => (
                       <th
@@ -813,12 +776,8 @@ const ThemeFinder = ({ mode = 'themes' }) => {
                         <LeadingCells
                           rank={i + 1}
                           theme={theme}
-                          hoveredTicker={hoveredTicker}
-                          setHoveredTicker={setHoveredTicker}
-                          mode={mode}
                           expanded={expandedThemeId === theme.id}
                           onExpand={() => toggleExpand(theme.id)}
-                          rsLeaderCount={getRsLeaderCount(theme)}
                         />
                         <td className="py-3 pr-4 hidden lg:table-cell">
                           <SparkRank rankPoints={REVERSAL_TFS.map(key => rankByTf[key][theme.id])} />
@@ -844,7 +803,7 @@ const ThemeFinder = ({ mode = 'themes' }) => {
                     <th className="text-left py-2 pr-3 w-8">#</th>
                     <th className="text-left py-2 pr-4">{Noun}</th>
                     <th className="text-left py-2 pr-4 hidden md:table-cell">Description</th>
-                    <th className="text-left py-2 pr-4 hidden lg:table-cell">Tickers</th>
+
                     <th className="text-left py-2 pr-4 hidden lg:table-cell">Trend</th>
                     {TIMEFRAMES.map((tf) => (
                       <th
@@ -865,12 +824,8 @@ const ThemeFinder = ({ mode = 'themes' }) => {
                         <LeadingCells
                           rank={i + 1}
                           theme={theme}
-                          hoveredTicker={hoveredTicker}
-                          setHoveredTicker={setHoveredTicker}
-                          mode={mode}
                           expanded={expandedThemeId === theme.id}
                           onExpand={() => toggleExpand(theme.id)}
-                          rsLeaderCount={getRsLeaderCount(theme)}
                         />
                         <td className="py-3 pr-4 hidden lg:table-cell">
                           <SparkRank rankPoints={REVERSAL_TFS.map(key => rankByTf[key][theme.id])} />
@@ -899,7 +854,7 @@ const ThemeFinder = ({ mode = 'themes' }) => {
                     <th className="text-left py-2 pr-3 w-8">#</th>
                     <th className="text-left py-2 pr-4">{Noun}</th>
                     <th className="text-left py-2 pr-4 hidden md:table-cell">Description</th>
-                    <th className="text-left py-2 pr-4 hidden lg:table-cell">Tickers</th>
+
                     <th className="text-left py-2 pr-4 hidden lg:table-cell">Trend</th>
                     {GOLDEN_TIMEFRAMES.map((tf) => (
                       <th key={tf.key} className="text-right py-2 px-3">{tf.label}</th>
@@ -916,12 +871,8 @@ const ThemeFinder = ({ mode = 'themes' }) => {
                         <LeadingCells
                           rank={i + 1}
                           theme={theme}
-                          hoveredTicker={hoveredTicker}
-                          setHoveredTicker={setHoveredTicker}
-                          mode={mode}
                           expanded={expandedThemeId === theme.id}
                           onExpand={() => toggleExpand(theme.id)}
-                          rsLeaderCount={getRsLeaderCount(theme)}
                         />
                         <td className="py-3 pr-4 hidden lg:table-cell">
                           <SparkRank rankPoints={REVERSAL_TFS.map(key => rankByTf[key][theme.id])} />
@@ -1011,11 +962,6 @@ const ThemeFinder = ({ mode = 'themes' }) => {
                                   <div>
                                     <div className="flex items-center gap-1.5 flex-wrap">
                                       <span className="text-xs font-medium">{theme.displayName}</span>
-                                      {rsLeaderCount != null && (
-                                        <span className="text-xs text-gray-500 font-mono whitespace-nowrap">
-                                          {rsLeaderCount}/{theme.tickers.length} ▲
-                                        </span>
-                                      )}
                                     </div>
                                     <div className="flex flex-wrap gap-0.5 mt-0.5">
                                       {theme.tickers.slice(0, 6).map((ticker) => (
@@ -1056,8 +1002,6 @@ const ThemeFinder = ({ mode = 'themes' }) => {
                                         theme={theme}
                                         tickerPerf={tickerPerf}
                                         sortBy={sortBy}
-                                        hoveredTicker={hoveredTicker}
-                                        setHoveredTicker={setHoveredTicker}
                                       />
                                     </div>
                                   </td>
