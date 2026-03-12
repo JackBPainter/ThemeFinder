@@ -1,15 +1,17 @@
-import { useState, useEffect, useCallback } from 'react';
-import { RefreshCw } from 'lucide-react';
+import { useState, useEffect, useCallback, Fragment } from 'react';
+import { RefreshCw, ChevronDown, ChevronRight } from 'lucide-react';
+import { getStockPerformance } from '../services/yahooFinanceApi';
 
 // key  = internal identifier & React key
 // st   = Finviz "st" query param (empty string = intraday/1-day)
+// short = abbreviated label used in the stock drill-down sub-table
 const TIMEFRAMES = [
-  { key: 'd1',  st: '',    label: '1 Day'    },
-  { key: 'w1',  st: 'w1',  label: '1 Week'   },
-  { key: 'w4',  st: 'w4',  label: '1 Month'  },
-  { key: 'w13', st: 'w13', label: '3 Months' },
-  { key: 'w26', st: 'w26', label: '6 Months' },
-  { key: 'w52', st: 'w52', label: '1 Year'   },
+  { key: 'd1',  st: '',    label: '1 Day',    short: '1D' },
+  { key: 'w1',  st: 'w1',  label: '1 Week',   short: '1W' },
+  { key: 'w4',  st: 'w4',  label: '1 Month',  short: '1M' },
+  { key: 'w13', st: 'w13', label: '3 Months', short: '3M' },
+  { key: 'w26', st: 'w26', label: '6 Months', short: '6M' },
+  { key: 'w52', st: 'w52', label: '1 Year',   short: '1Y' },
 ];
 
 const TABS = [
@@ -201,21 +203,12 @@ async function fetchDefinitions(mapType) {
   const items = [];
 
   if (mapType === 'sectors') {
-    // Sector chunk: 3-level tree  →  Sector → Industry (sub-sector) → Stock leaf
-    // Stock leaf:    {name:"MSFT",description:"Microsoft Corporation",value:N}
-    // Industry node: {name:"Semiconductors",children:[stocks...]}   ← 1 "children:[" in block
-    // Sector node:   {name:"Technology",children:[industries...]}   ← N "children:[" in block
-    //
-    // Strategy: scan all {name:"…",children:[ nodes; keep only those whose block
-    // contains exactly one "children:[" (own array only → industry level, not sector level).
-
     const nodeRe = /\{name:"([^"]+)",children:\[/g;
     let nm;
     while ((nm = nodeRe.exec(js)) !== null) {
       const name = nm[1];
       const nodeStart = nm.index;
 
-      // Extract full node block via bracket counting
       let depth = 0, end = nodeStart;
       for (let i = nodeStart; i < Math.min(js.length, nodeStart + 400000); i++) {
         if (js[i] === '{') depth++;
@@ -224,11 +217,8 @@ async function fetchDefinitions(mapType) {
 
       const block = js.slice(nodeStart, end + 1);
 
-      // Industry groups have exactly 1 "children:[" (their own).
-      // Sectors have > 1 because each nested industry also has "children:[".
       if ((block.match(/children:\[/g) || []).length !== 1) continue;
 
-      // Extract stock tickers: short uppercase names followed by ,description:
       const tickerRe = /name:"([A-Z][A-Z0-9.]{0,4})",description:/g;
       const tickers = [];
       let tm;
@@ -244,7 +234,6 @@ async function fetchDefinitions(mapType) {
       }
     }
   } else {
-    // Themes chunk: flat list with name/displayName/description/extra fields
     const PATTERNS = [
       { re: /name:"([a-z][^"]+)",displayName:"([^"]+)",description:"([^"]*)",extra:"([^"]+)"/g, hasDesc: true  },
       { re: /name:"([a-z][^"]+)",displayName:"([^"]+)",extra:"([^"]+)"/g,                       hasDesc: false },
@@ -303,6 +292,18 @@ function perfCls(v) {
   return 'text-red-500';
 }
 
+// Momentum-weighted composite RS score vs SPY.
+// Weights: 1W×3 + 1M×2 + 3M×1, minus SPY's equivalent weighted score.
+function computeCompositeRS(ticker, tickerPerf) {
+  const spy1w = tickerPerf['w1']?.['SPY'] ?? 0;
+  const spy1m = tickerPerf['w4']?.['SPY'] ?? 0;
+  const spy3m = tickerPerf['w13']?.['SPY'] ?? 0;
+  const p1w = tickerPerf['w1']?.[ticker] ?? 0;
+  const p1m = tickerPerf['w4']?.[ticker] ?? 0;
+  const p3m = tickerPerf['w13']?.[ticker] ?? 0;
+  return (p1w * 3 + p1m * 2 + p3m * 1) - (spy1w * 3 + spy1m * 2 + spy3m * 1);
+}
+
 // Inline SVG sparkline — shows rank trend from 1Y → 6M → 3M → 1M
 // Lower rank number = better position, so lower y = better (chart reads top = best)
 function SparkRank({ rankPoints }) {
@@ -312,11 +313,11 @@ function SparkRank({ rankPoints }) {
   const pts = rankPoints.map((rp, i) => {
     if (!rp) return null;
     const x = (i / (n - 1)) * W;
-    const y = (rp.rank / rp.total) * H; // higher rank# → lower on chart (worse)
+    const y = (rp.rank / rp.total) * H;
     return { x, y };
   });
   const valid2 = pts.filter(Boolean);
-  const improving = valid2[valid2.length - 1].y < valid2[0].y; // rank# went down = better
+  const improving = valid2[valid2.length - 1].y < valid2[0].y;
   const color = improving ? '#22c55e' : '#ef4444';
   const d = valid2.map((p, i) => `${i === 0 ? 'M' : 'L'}${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ');
   return (
@@ -327,20 +328,171 @@ function SparkRank({ rankPoints }) {
   );
 }
 
-// Shared leading columns (rank, theme/sector link, description, tickers)
-function LeadingCells({ rank, theme, hoveredTicker, setHoveredTicker, mode }) {
+// Stock-level relative strength drill-down sub-table.
+// Primary data: Finviz merged nodes (themes + sectors), already in tickerPerf.
+// Fallback: Yahoo Finance via Vite proxy for any tickers absent from both Finviz maps.
+function StockDrillDown({ theme, tickerPerf, sortBy, hoveredTicker, setHoveredTicker }) {
+  const [extraPerf, setExtraPerf] = useState({});
+  const [fetchingTickers, setFetchingTickers] = useState(new Set());
+
+  useEffect(() => {
+    const missing = theme.tickers.filter(
+      (ticker) => !TIMEFRAMES.some((tf) => tickerPerf[tf.key]?.[ticker] != null),
+    );
+    if (missing.length === 0) return;
+
+    let cancelled = false;
+    setExtraPerf({});
+    setFetchingTickers(new Set(missing));
+
+    (async () => {
+      for (const ticker of missing) {
+        if (cancelled) break;
+        const perf = await getStockPerformance(ticker);
+        if (cancelled) break;
+        setExtraPerf((prev) => ({ ...prev, [ticker]: perf ?? {} }));
+        setFetchingTickers((prev) => { const s = new Set(prev); s.delete(ticker); return s; });
+        await new Promise((r) => setTimeout(r, 300));
+      }
+    })();
+
+    return () => { cancelled = true; };
+  }, [theme.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const getPerfForTicker = (ticker) =>
+    Object.fromEntries(
+      TIMEFRAMES.map((tf) => [
+        tf.key,
+        tickerPerf[tf.key]?.[ticker] ?? extraPerf[ticker]?.[tf.key] ?? null,
+      ]),
+    );
+
+  const mergedForRS = {
+    ...tickerPerf,
+    w1:  { ...(tickerPerf.w1  ?? {}), ...Object.fromEntries(Object.entries(extraPerf).map(([t, p]) => [t, tickerPerf.w1?.[t]  ?? p?.w1  ?? 0])) },
+    w4:  { ...(tickerPerf.w4  ?? {}), ...Object.fromEntries(Object.entries(extraPerf).map(([t, p]) => [t, tickerPerf.w4?.[t]  ?? p?.w4  ?? 0])) },
+    w13: { ...(tickerPerf.w13 ?? {}), ...Object.fromEntries(Object.entries(extraPerf).map(([t, p]) => [t, tickerPerf.w13?.[t] ?? p?.w13 ?? 0])) },
+  };
+
+  const tickerData = theme.tickers
+    .map((ticker) => {
+      const perfs = getPerfForTicker(ticker);
+      const spyPerf = tickerPerf[sortBy]?.['SPY'] ?? 0;
+      const rsVsSpy = perfs[sortBy] != null ? perfs[sortBy] - spyPerf : null;
+      const compositeRS = computeCompositeRS(ticker, mergedForRS);
+      return { ticker, perfs, rsVsSpy, compositeRS };
+    })
+    .sort((a, b) => b.compositeRS - a.compositeRS);
+
+  const themeAvg = Object.fromEntries(TIMEFRAMES.map((tf) => [tf.key, theme.perf[tf.key]]));
+  const top3 = new Set(tickerData.slice(0, 3).map((d) => d.ticker));
+
+  return (
+    <div className="overflow-x-auto">
+      <table className="w-full text-xs">
+        <thead>
+          <tr className="text-gray-500 border-b border-accent/30">
+            <th className="text-left py-1.5 px-2 w-5">#</th>
+            <th className="text-left py-1.5 px-2">Ticker</th>
+            {TIMEFRAMES.map((tf) => (
+              <th
+                key={tf.key}
+                className={`text-right py-1.5 px-2 ${sortBy === tf.key ? 'text-gray-200' : ''}`}
+              >
+                {tf.short}
+              </th>
+            ))}
+            <th className="text-right py-1.5 px-2 text-blue-400 whitespace-nowrap">RS/SPY</th>
+            <th className="text-right py-1.5 px-2 text-purple-400 whitespace-nowrap">Comp RS</th>
+          </tr>
+        </thead>
+        <tbody>
+          {tickerData.map((d, i) => {
+            const isLoading = fetchingTickers.has(d.ticker);
+            return (
+              <tr key={d.ticker} className="border-b border-accent/10 hover:bg-accent/10 transition-colors">
+                <td className="py-1.5 px-2 text-gray-600 font-mono">{i + 1}</td>
+                <td className="py-1.5 px-2">
+                  <a
+                    href={`https://www.tradingview.com/chart/?symbol=${d.ticker}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    onMouseEnter={() => setHoveredTicker(d.ticker)}
+                    onMouseLeave={() => setHoveredTicker(null)}
+                    className={`font-mono font-medium px-1 py-0.5 rounded transition-colors ${
+                      hoveredTicker === d.ticker
+                        ? 'bg-accent text-white ring-1 ring-accent'
+                        : top3.has(d.ticker)
+                        ? 'text-yellow-400 hover:bg-accent/30'
+                        : 'text-gray-300 hover:bg-accent/30'
+                    }`}
+                  >
+                    {d.ticker}
+                  </a>
+                </td>
+                {TIMEFRAMES.map((tf) => (
+                  <td key={tf.key} className={`py-1.5 px-2 text-right font-mono ${isLoading && d.perfs[tf.key] == null ? 'text-gray-600' : perfCls(d.perfs[tf.key])}`}>
+                    {isLoading && d.perfs[tf.key] == null ? '…' : fmt(d.perfs[tf.key])}
+                  </td>
+                ))}
+                <td className={`py-1.5 px-2 text-right font-mono ${
+                  isLoading && d.rsVsSpy == null ? 'text-gray-600' :
+                  d.rsVsSpy == null ? 'text-gray-500' : d.rsVsSpy >= 0 ? 'text-green-400' : 'text-red-400'
+                }`}>
+                  {isLoading && d.rsVsSpy == null ? '…' : d.rsVsSpy != null ? fmt(d.rsVsSpy) : '-'}
+                </td>
+                <td className={`py-1.5 px-2 text-right font-mono font-semibold ${
+                  top3.has(d.ticker) ? 'text-yellow-400' : perfCls(d.compositeRS)
+                }`}>
+                  {d.compositeRS >= 0 ? '+' : ''}{d.compositeRS.toFixed(2)}
+                </td>
+              </tr>
+            );
+          })}
+          <tr className="border-t border-accent/30 bg-accent/5">
+            <td className="py-1.5 px-2 text-gray-600 font-mono">—</td>
+            <td className="py-1.5 px-2 text-gray-500 italic">avg</td>
+            {TIMEFRAMES.map((tf) => (
+              <td key={tf.key} className="py-1.5 px-2 text-right font-mono text-gray-500 italic">
+                {fmt(themeAvg[tf.key])}
+              </td>
+            ))}
+            <td colSpan={2} className="py-1.5 px-2 text-right text-gray-600 italic">theme avg</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+// Shared leading columns (chevron, rank, theme/sector link, RS badge, description, tickers)
+function LeadingCells({ rank, theme, hoveredTicker, setHoveredTicker, mode, expanded = false, onExpand = () => {}, rsLeaderCount = null }) {
   return (
     <>
-      <td className="py-3 pr-3 text-gray-500 font-mono text-xs">{rank}</td>
+      <td className="py-3 pr-3 font-mono text-xs">
+        <div className="flex items-center gap-1.5">
+          <button
+            onClick={onExpand}
+            className="text-gray-500 hover:text-success transition-colors flex-shrink-0 leading-none"
+            title={expanded ? 'Collapse stocks' : 'Show stocks'}
+          >
+            {expanded ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+          </button>
+          <span className="text-gray-500">{rank}</span>
+        </div>
+      </td>
       <td className="py-3 pr-4 font-medium">
-        <a
-          href={`https://finviz.com/screener.ashx?v=11&t=${theme.tickers.join(',')}`}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="hover:text-success transition-colors"
-        >
-          {theme.displayName}
-        </a>
+        <div className="flex items-center gap-2 flex-wrap">
+          <span>{theme.displayName}</span>
+          {rsLeaderCount != null && (
+            <span
+              className="text-xs text-gray-500 font-mono whitespace-nowrap"
+              title="Tickers with positive composite RS vs SPY"
+            >
+              {rsLeaderCount}/{theme.tickers.length} ▲
+            </span>
+          )}
+        </div>
       </td>
       <td className="py-3 pr-4 text-gray-400 text-xs hidden md:table-cell">
         {theme.description}
@@ -374,27 +526,39 @@ const ThemeFinder = ({ mode = 'themes' }) => {
   const noun = mode === 'sectors' ? 'sector' : 'theme';
   const Noun = mode === 'sectors' ? 'Sector' : 'Theme';
   const [themes, setThemes] = useState([]);
+  const [tickerPerf, setTickerPerf] = useState({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [sortBy, setSortBy] = useState('w1');
   const [lastUpdated, setLastUpdated] = useState(null);
   const [activeTab, setActiveTab] = useState('performance');
   const [hoveredTicker, setHoveredTicker] = useState(null);
-  const [trimStart, setTrimStart] = useState(0); // remove N shortest timeframes from golden
-  const [trimEnd, setTrimEnd] = useState(0);     // remove N longest timeframes from golden
+  const [trimStart, setTrimStart] = useState(0);
+  const [trimEnd, setTrimEnd] = useState(0);
+  const [expandedThemeId, setExpandedThemeId] = useState(null);
 
   const fetchData = useCallback(async () => {
     setLoading(true);
     setError(null);
     setThemes([]);
+    setTickerPerf({});
+    setExpandedThemeId(null);
     try {
-      const [defs, ...perfResults] = await Promise.all([
+      // Fetch both map types in parallel — themes + sectors cover different stock universes.
+      // Primary mode (current view) takes priority on overlap; the other fills gaps.
+      const otherMode = mode === 'themes' ? 'sectors' : 'themes';
+      const [defs, ...allPerf] = await Promise.all([
         fetchDefinitions(mode),
         ...TIMEFRAMES.map((tf) => fetchPerfData(tf.st, mode)),
+        ...TIMEFRAMES.map((tf) => fetchPerfData(tf.st, otherMode)),
       ]);
 
+      const primaryPerf = allPerf.slice(0, TIMEFRAMES.length);
+      const secondaryPerf = allPerf.slice(TIMEFRAMES.length);
+
+      // Merge: secondary fills any gaps, primary overwrites where both have data
       const perfByKey = Object.fromEntries(
-        TIMEFRAMES.map((tf, i) => [tf.key, perfResults[i]])
+        TIMEFRAMES.map((tf, i) => [tf.key, { ...secondaryPerf[i], ...primaryPerf[i] }])
       );
 
       const scored = defs
@@ -406,6 +570,7 @@ const ThemeFinder = ({ mode = 'themes' }) => {
         }))
         .filter((t) => TIMEFRAMES.some((tf) => t.perf[tf.key] != null));
 
+      setTickerPerf(perfByKey);
       setThemes(scored);
       setLastUpdated(new Date());
     } catch (err) {
@@ -419,6 +584,21 @@ const ThemeFinder = ({ mode = 'themes' }) => {
     fetchData();
   }, [fetchData]);
 
+  // Collapse any open drill-down when mode (themes/sectors) changes
+  useEffect(() => {
+    setExpandedThemeId(null);
+  }, [mode]);
+
+  const toggleExpand = useCallback((themeId) => {
+    setExpandedThemeId((prev) => (prev === themeId ? null : themeId));
+  }, []);
+
+  // Count tickers outperforming SPY on composite RS — returns null if data not yet loaded
+  const getRsLeaderCount = (theme) => {
+    if (!tickerPerf.w1) return null;
+    return theme.tickers.filter((ticker) => computeCompositeRS(ticker, tickerPerf) > 0).length;
+  };
+
   const sortedBy = (key) =>
     [...themes]
       .sort((a, b) => {
@@ -429,13 +609,9 @@ const ThemeFinder = ({ mode = 'themes' }) => {
         return vb - va;
       });
 
-  // Performance tab: top 20 sorted by selected timeframe
   const perfRows = sortedBy(sortBy).slice(0, 20);
-
-  // Ranking tab: top 20 sorted by same timeframe as Performance tab
   const rankingRows = sortedBy(sortBy).slice(0, 20);
 
-  // For each timeframe, compute rank/total across ALL themes
   const rankByTf = Object.fromEntries(
     TIMEFRAMES.map((tf) => {
       const withPerf = themes.filter((t) => t.perf[tf.key] != null);
@@ -446,7 +622,6 @@ const ThemeFinder = ({ mode = 'themes' }) => {
     })
   );
 
-  // Golden Themes: top 20 by average rank — trimStart/trimEnd let user hide shortest/longest TFs
   const maxTrim = TIMEFRAMES.length - 1;
   const safeStart = Math.min(trimStart, maxTrim - trimEnd);
   const safeEnd = Math.min(trimEnd, maxTrim - trimStart);
@@ -462,9 +637,6 @@ const ThemeFinder = ({ mode = 'themes' }) => {
     .sort((a, b) => a.avgRank - b.avgRank)
     .slice(0, 20);
 
-  // Reversals: divergence between 1M rank and 1Y rank
-  // divergence > 0 → recently strong but historically weak → overextended (likely to fade)
-  // divergence < 0 → recently weak but historically strong → bounce candidate (likely to recover)
   const reversalData = themes
     .map((t) => {
       const r1m = rankByTf['w4'][t.id];
@@ -472,7 +644,6 @@ const ThemeFinder = ({ mode = 'themes' }) => {
       const r6m = rankByTf['w26'][t.id];
       const r1y = rankByTf['w52'][t.id];
       if (!r1m || !r1y) return null;
-      // positive divergence = lower (better) 1M rank vs 1Y rank = overextended
       const divergence = r1y.rank - r1m.rank;
       return { ...t, r1m, r3m, r6m, r1y, divergence };
     })
@@ -486,6 +657,24 @@ const ThemeFinder = ({ mode = 'themes' }) => {
     .sort((a, b) => a.divergence - b.divergence)
     .slice(0, 15);
 
+  // Shared expand row rendered below an expanded theme row
+  const ExpandRow = ({ theme, colSpan = 20 }) =>
+    expandedThemeId === theme.id && Object.keys(tickerPerf).length > 0 ? (
+      <tr>
+        <td colSpan={colSpan} className="p-0">
+          <div className="bg-secondary/20 border-l-2 border-success px-4 py-3">
+            <StockDrillDown
+              theme={theme}
+              tickerPerf={tickerPerf}
+              sortBy={sortBy}
+              hoveredTicker={hoveredTicker}
+              setHoveredTicker={setHoveredTicker}
+            />
+          </div>
+        </td>
+      </tr>
+    ) : null;
+
   return (
     <div className="bg-primary rounded-lg overflow-hidden h-full flex flex-col">
       {/* Tabs */}
@@ -493,7 +682,7 @@ const ThemeFinder = ({ mode = 'themes' }) => {
         {TABS.map((tab) => (
           <button
             key={tab.key}
-            onClick={() => setActiveTab(tab.key)}
+            onClick={() => { setActiveTab(tab.key); setExpandedThemeId(null); }}
             className={`px-4 py-2.5 text-sm font-medium transition-colors border-b-2 -mb-px ${
               activeTab === tab.key
                 ? 'border-accent text-white'
@@ -617,23 +806,37 @@ const ThemeFinder = ({ mode = 'themes' }) => {
                 </thead>
                 <tbody>
                   {perfRows.map((theme, i) => (
-                    <tr key={theme.id} className="border-b border-accent/20 hover:bg-secondary/50 transition-colors">
-                      <LeadingCells rank={i + 1} theme={theme} hoveredTicker={hoveredTicker} setHoveredTicker={setHoveredTicker} mode={mode} />
-                      <td className="py-3 pr-4 hidden lg:table-cell">
-                        <SparkRank rankPoints={REVERSAL_TFS.map(key => rankByTf[key][theme.id])} />
-                      </td>
-                      {TIMEFRAMES.map((tf) => (
-                        <td key={tf.key} className={`py-3 px-3 text-right font-mono ${perfCls(theme.perf[tf.key])}`}>
-                          {fmt(theme.perf[tf.key])}
+                    <Fragment key={theme.id}>
+                      <tr className={`border-b border-accent/20 hover:bg-secondary/50 transition-colors ${
+                        expandedThemeId === theme.id ? 'bg-secondary/40' : ''
+                      }`}>
+                        <LeadingCells
+                          rank={i + 1}
+                          theme={theme}
+                          hoveredTicker={hoveredTicker}
+                          setHoveredTicker={setHoveredTicker}
+                          mode={mode}
+                          expanded={expandedThemeId === theme.id}
+                          onExpand={() => toggleExpand(theme.id)}
+                          rsLeaderCount={getRsLeaderCount(theme)}
+                        />
+                        <td className="py-3 pr-4 hidden lg:table-cell">
+                          <SparkRank rankPoints={REVERSAL_TFS.map(key => rankByTf[key][theme.id])} />
                         </td>
-                      ))}
-                    </tr>
+                        {TIMEFRAMES.map((tf) => (
+                          <td key={tf.key} className={`py-3 px-3 text-right font-mono ${perfCls(theme.perf[tf.key])}`}>
+                            {fmt(theme.perf[tf.key])}
+                          </td>
+                        ))}
+                      </tr>
+                      <ExpandRow theme={theme} />
+                    </Fragment>
                   ))}
                 </tbody>
               </table>
             )}
 
-            {/* Ranking tab — sorted by 1 Day, each timeframe column shows rank/total */}
+            {/* Ranking tab */}
             {activeTab === 'ranking' && (
               <table className="w-full text-sm">
                 <thead>
@@ -655,26 +858,40 @@ const ThemeFinder = ({ mode = 'themes' }) => {
                 </thead>
                 <tbody>
                   {rankingRows.map((theme, i) => (
-                    <tr key={theme.id} className="border-b border-accent/20 hover:bg-secondary/50 transition-colors">
-                      <LeadingCells rank={i + 1} theme={theme} hoveredTicker={hoveredTicker} setHoveredTicker={setHoveredTicker} mode={mode} />
-                      <td className="py-3 pr-4 hidden lg:table-cell">
-                        <SparkRank rankPoints={REVERSAL_TFS.map(key => rankByTf[key][theme.id])} />
-                      </td>
-                      {TIMEFRAMES.map((tf) => {
-                        const r = rankByTf[tf.key][theme.id];
-                        return (
-                          <td key={tf.key} className="py-3 px-3 text-right font-mono text-xs text-gray-300">
-                            {r ? ordinal(r.rank) : '-'}
-                          </td>
-                        );
-                      })}
-                    </tr>
+                    <Fragment key={theme.id}>
+                      <tr className={`border-b border-accent/20 hover:bg-secondary/50 transition-colors ${
+                        expandedThemeId === theme.id ? 'bg-secondary/40' : ''
+                      }`}>
+                        <LeadingCells
+                          rank={i + 1}
+                          theme={theme}
+                          hoveredTicker={hoveredTicker}
+                          setHoveredTicker={setHoveredTicker}
+                          mode={mode}
+                          expanded={expandedThemeId === theme.id}
+                          onExpand={() => toggleExpand(theme.id)}
+                          rsLeaderCount={getRsLeaderCount(theme)}
+                        />
+                        <td className="py-3 pr-4 hidden lg:table-cell">
+                          <SparkRank rankPoints={REVERSAL_TFS.map(key => rankByTf[key][theme.id])} />
+                        </td>
+                        {TIMEFRAMES.map((tf) => {
+                          const r = rankByTf[tf.key][theme.id];
+                          return (
+                            <td key={tf.key} className="py-3 px-3 text-right font-mono text-xs text-gray-300">
+                              {r ? ordinal(r.rank) : '-'}
+                            </td>
+                          );
+                        })}
+                      </tr>
+                      <ExpandRow theme={theme} />
+                    </Fragment>
                   ))}
                 </tbody>
               </table>
             )}
 
-            {/* Golden tab — sorted by avg rank across all timeframes (excl. 1 Day) */}
+            {/* Golden tab */}
             {activeTab === 'golden' && (
               <table className="w-full text-sm">
                 <thead>
@@ -692,23 +909,37 @@ const ThemeFinder = ({ mode = 'themes' }) => {
                 </thead>
                 <tbody>
                   {goldenRows.map((theme, i) => (
-                    <tr key={theme.id} className="border-b border-accent/20 hover:bg-secondary/50 transition-colors">
-                      <LeadingCells rank={i + 1} theme={theme} hoveredTicker={hoveredTicker} setHoveredTicker={setHoveredTicker} mode={mode} />
-                      <td className="py-3 pr-4 hidden lg:table-cell">
-                        <SparkRank rankPoints={REVERSAL_TFS.map(key => rankByTf[key][theme.id])} />
-                      </td>
-                      {GOLDEN_TIMEFRAMES.map((tf) => {
-                        const r = rankByTf[tf.key][theme.id];
-                        return (
-                          <td key={tf.key} className="py-3 px-3 text-right font-mono text-xs text-gray-300">
-                            {r ? ordinal(r.rank) : '-'}
-                          </td>
-                        );
-                      })}
-                      <td className="py-3 px-3 text-right font-mono text-xs text-yellow-400 font-semibold">
-                        {ordinal(Math.round(theme.avgRank))}
-                      </td>
-                    </tr>
+                    <Fragment key={theme.id}>
+                      <tr className={`border-b border-accent/20 hover:bg-secondary/50 transition-colors ${
+                        expandedThemeId === theme.id ? 'bg-secondary/40' : ''
+                      }`}>
+                        <LeadingCells
+                          rank={i + 1}
+                          theme={theme}
+                          hoveredTicker={hoveredTicker}
+                          setHoveredTicker={setHoveredTicker}
+                          mode={mode}
+                          expanded={expandedThemeId === theme.id}
+                          onExpand={() => toggleExpand(theme.id)}
+                          rsLeaderCount={getRsLeaderCount(theme)}
+                        />
+                        <td className="py-3 pr-4 hidden lg:table-cell">
+                          <SparkRank rankPoints={REVERSAL_TFS.map(key => rankByTf[key][theme.id])} />
+                        </td>
+                        {GOLDEN_TIMEFRAMES.map((tf) => {
+                          const r = rankByTf[tf.key][theme.id];
+                          return (
+                            <td key={tf.key} className="py-3 px-3 text-right font-mono text-xs text-gray-300">
+                              {r ? ordinal(r.rank) : '-'}
+                            </td>
+                          );
+                        })}
+                        <td className="py-3 px-3 text-right font-mono text-xs text-yellow-400 font-semibold">
+                          {ordinal(Math.round(theme.avgRank))}
+                        </td>
+                      </tr>
+                      <ExpandRow theme={theme} />
+                    </Fragment>
                   ))}
                 </tbody>
               </table>
@@ -756,50 +987,83 @@ const ThemeFinder = ({ mode = 'themes' }) => {
                       <tbody>
                         {rows.map((theme, i) => {
                           const sparkPoints = [theme.r1y, theme.r6m, theme.r3m, theme.r1m];
+                          const rsLeaderCount = getRsLeaderCount(theme);
                           return (
-                            <tr key={theme.id} className="border-b border-accent/10 hover:bg-secondary/50 transition-colors">
-                              <td className="py-2 px-2 text-gray-500 font-mono text-xs">{i + 1}</td>
-                              <td className="py-2 px-2">
-                                <div>
-                                  <a
-                                    href={`https://finviz.com/screener.ashx?v=11&t=${theme.tickers.join(',')}`}
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    className="text-xs font-medium hover:text-success transition-colors block"
-                                  >
-                                    {theme.displayName}
-                                  </a>
-                                  <div className="flex flex-wrap gap-0.5 mt-0.5">
-                                    {theme.tickers.slice(0, 6).map((ticker) => (
-                                      <a
-                                        key={ticker}
-                                        href={`https://www.tradingview.com/chart/?symbol=${ticker}`}
-                                        target="_blank"
-                                        rel="noopener noreferrer"
-                                        onMouseEnter={() => setHoveredTicker(ticker)}
-                                        onMouseLeave={() => setHoveredTicker(null)}
-                                        className={`text-xs font-mono px-1 py-0.5 rounded transition-colors ${
-                                          hoveredTicker === ticker
-                                            ? 'bg-accent text-white ring-1 ring-accent'
-                                            : 'bg-secondary text-gray-400 hover:bg-accent hover:text-white'
-                                        }`}
-                                      >
-                                        {ticker}
-                                      </a>
-                                    ))}
-                                    {theme.tickers.length > 6 && (
-                                      <span className="text-xs text-gray-600 px-1 py-0.5">+{theme.tickers.length - 6}</span>
-                                    )}
+                            <Fragment key={theme.id}>
+                              <tr className={`border-b border-accent/10 hover:bg-secondary/50 transition-colors ${
+                                expandedThemeId === theme.id ? 'bg-secondary/40' : ''
+                              }`}>
+                                <td className="py-2 px-2 text-gray-500 font-mono text-xs">
+                                  <div className="flex items-center gap-1">
+                                    <button
+                                      onClick={() => toggleExpand(theme.id)}
+                                      className="text-gray-500 hover:text-success transition-colors leading-none"
+                                      title={expandedThemeId === theme.id ? 'Collapse stocks' : 'Show stocks'}
+                                    >
+                                      {expandedThemeId === theme.id
+                                        ? <ChevronDown size={12} />
+                                        : <ChevronRight size={12} />}
+                                    </button>
+                                    {i + 1}
                                   </div>
-                                </div>
-                              </td>
-                              <td className="py-2 px-2 text-right font-mono text-xs text-gray-400">{theme.r1y ? ordinal(theme.r1y.rank) : '-'}</td>
-                              <td className="py-2 px-2 text-right font-mono text-xs text-gray-400">{theme.r6m ? ordinal(theme.r6m.rank) : '-'}</td>
-                              <td className="py-2 px-2 text-right font-mono text-xs text-gray-400">{theme.r3m ? ordinal(theme.r3m.rank) : '-'}</td>
-                              <td className="py-2 px-2 text-right font-mono text-xs text-gray-400">{theme.r1m ? ordinal(theme.r1m.rank) : '-'}</td>
-                              <td className="py-2 px-2 text-right"><SparkRank rankPoints={sparkPoints} /></td>
-                              <td className={`py-2 px-2 text-right font-mono text-xs font-semibold ${scoreColor}`}>{scoreFn(theme)}</td>
-                            </tr>
+                                </td>
+                                <td className="py-2 px-2">
+                                  <div>
+                                    <div className="flex items-center gap-1.5 flex-wrap">
+                                      <span className="text-xs font-medium">{theme.displayName}</span>
+                                      {rsLeaderCount != null && (
+                                        <span className="text-xs text-gray-500 font-mono whitespace-nowrap">
+                                          {rsLeaderCount}/{theme.tickers.length} ▲
+                                        </span>
+                                      )}
+                                    </div>
+                                    <div className="flex flex-wrap gap-0.5 mt-0.5">
+                                      {theme.tickers.slice(0, 6).map((ticker) => (
+                                        <a
+                                          key={ticker}
+                                          href={`https://www.tradingview.com/chart/?symbol=${ticker}`}
+                                          target="_blank"
+                                          rel="noopener noreferrer"
+                                          onMouseEnter={() => setHoveredTicker(ticker)}
+                                          onMouseLeave={() => setHoveredTicker(null)}
+                                          className={`text-xs font-mono px-1 py-0.5 rounded transition-colors ${
+                                            hoveredTicker === ticker
+                                              ? 'bg-accent text-white ring-1 ring-accent'
+                                              : 'bg-secondary text-gray-400 hover:bg-accent hover:text-white'
+                                          }`}
+                                        >
+                                          {ticker}
+                                        </a>
+                                      ))}
+                                      {theme.tickers.length > 6 && (
+                                        <span className="text-xs text-gray-600 px-1 py-0.5">+{theme.tickers.length - 6}</span>
+                                      )}
+                                    </div>
+                                  </div>
+                                </td>
+                                <td className="py-2 px-2 text-right font-mono text-xs text-gray-400">{theme.r1y ? ordinal(theme.r1y.rank) : '-'}</td>
+                                <td className="py-2 px-2 text-right font-mono text-xs text-gray-400">{theme.r6m ? ordinal(theme.r6m.rank) : '-'}</td>
+                                <td className="py-2 px-2 text-right font-mono text-xs text-gray-400">{theme.r3m ? ordinal(theme.r3m.rank) : '-'}</td>
+                                <td className="py-2 px-2 text-right font-mono text-xs text-gray-400">{theme.r1m ? ordinal(theme.r1m.rank) : '-'}</td>
+                                <td className="py-2 px-2 text-right"><SparkRank rankPoints={sparkPoints} /></td>
+                                <td className={`py-2 px-2 text-right font-mono text-xs font-semibold ${scoreColor}`}>{scoreFn(theme)}</td>
+                              </tr>
+                              {expandedThemeId === theme.id && Object.keys(tickerPerf).length > 0 && (
+                                <tr>
+                                  <td colSpan={8} className="p-0">
+                                    <div className="bg-secondary/20 border-l-2 border-success px-3 py-2">
+                                      <StockDrillDown
+                                        theme={theme}
+                                        tickerPerf={tickerPerf}
+                                        sortBy={sortBy}
+                                        hoveredTicker={hoveredTicker}
+                                        setHoveredTicker={setHoveredTicker}
+                                      />
+                                    </div>
+                                  </td>
+                                </tr>
+                              )}
+                            </Fragment>
                           );
                         })}
                       </tbody>
