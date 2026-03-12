@@ -386,7 +386,7 @@ function StockDrillDown({ theme, tickerPerf, sortBy }) {
     .sort((a, b) => b.compositeRS - a.compositeRS);
 
   const themeAvg = Object.fromEntries(TIMEFRAMES.map((tf) => [tf.key, theme.perf[tf.key]]));
-  const top3 = new Set(tickerData.slice(0, 3).map((d) => d.ticker));
+
 
   return (
     <div className="overflow-x-auto">
@@ -423,8 +423,6 @@ function StockDrillDown({ theme, tickerPerf, sortBy }) {
                     className={`font-mono font-medium px-1 py-0.5 rounded transition-colors ${
                       hoveredTicker === d.ticker
                         ? 'bg-accent text-white ring-1 ring-accent'
-                        : top3.has(d.ticker)
-                        ? 'text-yellow-400 hover:bg-accent/30'
                         : 'text-gray-300 hover:bg-accent/30'
                     }`}
                   >
@@ -443,7 +441,7 @@ function StockDrillDown({ theme, tickerPerf, sortBy }) {
                   {isLoading && d.rsVsSpy == null ? '…' : d.rsVsSpy != null ? fmt(d.rsVsSpy) : '-'}
                 </td>
                 <td className={`py-1.5 px-2 text-right font-mono font-semibold ${
-                  top3.has(d.ticker) ? 'text-yellow-400' : perfCls(d.compositeRS)
+                  perfCls(d.compositeRS)
                 }`}>
                   {d.compositeRS >= 0 ? '+' : ''}{d.compositeRS.toFixed(2)}
                 </td>
@@ -938,7 +936,6 @@ const ThemeFinder = ({ mode = 'themes' }) => {
                       <tbody>
                         {rows.map((theme, i) => {
                           const sparkPoints = [theme.r1y, theme.r6m, theme.r3m, theme.r1m];
-                          const rsLeaderCount = getRsLeaderCount(theme);
                           return (
                             <Fragment key={theme.id}>
                               <tr className={`border-b border-accent/10 hover:bg-secondary/50 transition-colors ${
