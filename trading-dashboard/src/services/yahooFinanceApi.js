@@ -105,6 +105,27 @@ export async function getStockPerformance(ticker) {
       return base ? ((last - base) / base) * 100 : null;
     };
 
+    // Volume data: compute today's volume and 3-month average volume for RVOL
+    const volumes = result.indicators?.quote?.[0]?.volume;
+    let volume = null;
+    let avgVolume = null;
+    let relVolume = null;
+
+    if (volumes && volumes.length > 0) {
+      // Today's volume is the last entry
+      volume = volumes[volumes.length - 1];
+      // Average volume over the last ~63 trading days (3 months)
+      const recentVols = volumes.slice(-63).filter((v) => v != null && v > 0);
+      if (recentVols.length > 1) {
+        // Exclude today from average to get a fair RVOL comparison
+        const avgVols = recentVols.slice(0, -1);
+        avgVolume = Math.round(avgVols.reduce((a, b) => a + b, 0) / avgVols.length);
+        if (avgVolume > 0 && volume != null) {
+          relVolume = Math.round((volume / avgVolume) * 100) / 100;
+        }
+      }
+    }
+
     return {
       d1:  pct(1),
       w1:  pct(5),
@@ -113,9 +134,54 @@ export async function getStockPerformance(ticker) {
       w26: pct(126),
       // 1Y: use the earliest close available (may be < 252 days for newer listings)
       w52: closes.length > 1 ? ((last - closes[0]) / closes[0]) * 100 : null,
+      volume,
+      avgVolume,
+      relVolume,
     };
   } catch (err) {
     console.warn(`[yahooApi] getStockPerformance error for ${ticker}:`, err.message);
+    return null;
+  }
+}
+
+/**
+ * Fetches today's pre-market volume for a ticker using 1-minute intraday data.
+ * Uses includePrePost=true to get extended hours bars, then sums volume for
+ * bars before 9:30 AM ET (market open).
+ *
+ * Returns the pre-market volume as a number, or null on error / no data.
+ */
+export async function getPreMarketVolume(ticker) {
+  try {
+    const res = await fetch(
+      `${BASE_URL}/v8/finance/chart/${encodeURIComponent(ticker)}?range=1d&interval=5m&includePrePost=true`,
+    );
+    if (!res.ok) return null;
+
+    const data = await res.json();
+    const result = data?.chart?.result?.[0];
+    if (!result) return null;
+
+    const timestamps = result.timestamp;
+    const volumes = result.indicators?.quote?.[0]?.volume;
+    if (!timestamps || !volumes) return null;
+
+    // Market open is 9:30 AM ET = 13:30 UTC (during EST) or 13:30 UTC (during EDT)
+    // Use the meta.tradingPeriods or gmtoffset to determine the cutoff
+    const gmtOffset = result.meta?.gmtoffset ?? -18000; // default EST (-5h)
+    const marketOpenLocalSecs = 9 * 3600 + 30 * 60; // 9:30 AM in seconds from midnight
+
+    let pmVolume = 0;
+    for (let i = 0; i < timestamps.length; i++) {
+      // Convert timestamp to local exchange seconds-from-midnight
+      const localSecs = ((timestamps[i] + gmtOffset) % 86400 + 86400) % 86400;
+      if (localSecs < marketOpenLocalSecs) {
+        pmVolume += (volumes[i] ?? 0);
+      }
+    }
+
+    return pmVolume > 0 ? pmVolume : null;
+  } catch (err) {
     return null;
   }
 }

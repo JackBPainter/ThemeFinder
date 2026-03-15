@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, Fragment } from 'react';
 import { RefreshCw, ChevronDown, ChevronRight } from 'lucide-react';
-import { getStockPerformance } from '../services/yahooFinanceApi';
+import { getStockPerformance, getPreMarketVolume } from '../services/yahooFinanceApi';
 
 // key  = internal identifier & React key
 // st   = Finviz "st" query param (empty string = intraday/1-day)
@@ -331,29 +331,67 @@ function SparkRank({ rankPoints }) {
 // Stock-level relative strength drill-down sub-table.
 // Primary data: Finviz merged nodes (themes + sectors), already in tickerPerf.
 // Fallback: Yahoo Finance via Vite proxy for any tickers absent from both Finviz maps.
+function getUSMarketPhase() {
+  const now = new Date();
+  const et = new Date(now.toLocaleString('en-US', { timeZone: 'America/New_York' }));
+  const day = et.getDay();
+  if (day === 0 || day === 6) return 'closed';
+  const mins = et.getHours() * 60 + et.getMinutes();
+  if (mins >= 240 && mins < 570) return 'premarket'; // 4:00 AM – 9:30 AM ET
+  if (mins >= 570 && mins < 960) return 'open';       // 9:30 AM – 4:00 PM ET
+  return 'closed';
+}
+
 function StockDrillDown({ theme, tickerPerf, sortBy }) {
   const [extraPerf, setExtraPerf] = useState({});
+  const [volData, setVolData] = useState({});
   const [fetchingTickers, setFetchingTickers] = useState(new Set());
   const [hoveredTicker, setHoveredTicker] = useState(null);
+  const marketPhase = getUSMarketPhase();
+  const showPM = marketPhase === 'premarket';
 
   useEffect(() => {
+    let cancelled = false;
+    setExtraPerf({});
+    setVolData({});
+
     const missing = theme.tickers.filter(
       (ticker) => !TIMEFRAMES.some((tf) => tickerPerf[tf.key]?.[ticker] != null),
     );
-    if (missing.length === 0) return;
-
-    let cancelled = false;
-    setExtraPerf({});
-    setFetchingTickers(new Set(missing));
+    const allTickers = theme.tickers;
+    setFetchingTickers(new Set(allTickers));
 
     (async () => {
-      for (const ticker of missing) {
+      for (const ticker of allTickers) {
         if (cancelled) break;
-        const perf = await getStockPerformance(ticker);
+        // Fetch performance + volume in parallel with pre-market volume (if applicable)
+        const phase = getUSMarketPhase();
+        const [perf, pmVol] = await Promise.all([
+          getStockPerformance(ticker),
+          phase === 'premarket' ? getPreMarketVolume(ticker) : Promise.resolve(null),
+        ]);
         if (cancelled) break;
-        setExtraPerf((prev) => ({ ...prev, [ticker]: perf ?? {} }));
+
+        // Store volume data for all tickers
+        if (perf) {
+          setVolData((prev) => ({
+            ...prev,
+            [ticker]: {
+              volume: perf.volume,
+              avgVolume: perf.avgVolume,
+              relVolume: perf.relVolume,
+              pmVolume: pmVol,
+            },
+          }));
+        }
+
+        // Only store perf data for tickers missing from Finviz
+        if (missing.includes(ticker)) {
+          setExtraPerf((prev) => ({ ...prev, [ticker]: perf ?? {} }));
+        }
+
         setFetchingTickers((prev) => { const s = new Set(prev); s.delete(ticker); return s; });
-        await new Promise((r) => setTimeout(r, 300));
+        await new Promise((r) => setTimeout(r, 200));
       }
     })();
 
@@ -403,6 +441,22 @@ function StockDrillDown({ theme, tickerPerf, sortBy }) {
                 {tf.short}
               </th>
             ))}
+            {showPM && (
+              <th
+                className="text-right py-1.5 px-2 whitespace-nowrap cursor-help text-amber-400"
+                title="Pre-market volume (4:00 AM – 9:30 AM ET)"
+              >PM Vol</th>
+            )}
+            <th
+              className="text-right py-1.5 px-2 whitespace-nowrap cursor-help"
+              title={marketPhase === 'open'
+                ? 'Regular session volume so far today (9:30 AM – now ET). Excludes pre/after hours.'
+                : "Previous session's regular hours volume (9:30 AM – 4:00 PM ET). Excludes pre/after hours."}
+            >Vol</th>
+            <th
+              className="text-right py-1.5 px-2 whitespace-nowrap cursor-help"
+              title="Relative Volume — today's volume vs 3-month average daily volume (regular hours only)"
+            >RVOL</th>
             <th className="text-right py-1.5 px-2 text-blue-400 whitespace-nowrap">RS/SPY</th>
             <th className="text-right py-1.5 px-2 text-purple-400 whitespace-nowrap">Comp RS</th>
           </tr>
@@ -434,6 +488,40 @@ function StockDrillDown({ theme, tickerPerf, sortBy }) {
                     {isLoading && d.perfs[tf.key] == null ? '…' : fmt(d.perfs[tf.key])}
                   </td>
                 ))}
+                {showPM && (
+                  <td className="py-1.5 px-2 text-right font-mono text-amber-400/80">
+                    {(() => {
+                      const pm = volData[d.ticker]?.pmVolume;
+                      if (pm == null) return fetchingTickers.has(d.ticker) ? '…' : '-';
+                      if (pm >= 1e6) return `${(pm / 1e6).toFixed(1)}M`;
+                      if (pm >= 1e3) return `${(pm / 1e3).toFixed(0)}K`;
+                      return pm.toLocaleString();
+                    })()}
+                  </td>
+                )}
+                <td className="py-1.5 px-2 text-right font-mono text-gray-400">
+                  {(() => {
+                    const vd = volData[d.ticker];
+                    if (!vd?.volume) return fetchingTickers.has(d.ticker) ? '…' : '-';
+                    if (vd.volume >= 1e6) return `${(vd.volume / 1e6).toFixed(1)}M`;
+                    if (vd.volume >= 1e3) return `${(vd.volume / 1e3).toFixed(0)}K`;
+                    return vd.volume.toLocaleString();
+                  })()}
+                </td>
+                <td className={`py-1.5 px-2 text-right font-mono ${
+                  (() => {
+                    const rv = volData[d.ticker]?.relVolume;
+                    if (rv == null) return 'text-gray-500';
+                    if (rv >= 3) return 'text-yellow-400 font-semibold';
+                    if (rv >= 2) return 'text-green-400';
+                    if (rv >= 1.5) return 'text-green-500';
+                    return 'text-gray-500';
+                  })()
+                }`}>
+                  {volData[d.ticker]?.relVolume != null
+                    ? `${volData[d.ticker].relVolume.toFixed(1)}x`
+                    : fetchingTickers.has(d.ticker) ? '…' : '-'}
+                </td>
                 <td className={`py-1.5 px-2 text-right font-mono ${
                   isLoading && d.rsVsSpy == null ? 'text-gray-600' :
                   d.rsVsSpy == null ? 'text-gray-500' : d.rsVsSpy >= 0 ? 'text-green-400' : 'text-red-400'
@@ -456,7 +544,7 @@ function StockDrillDown({ theme, tickerPerf, sortBy }) {
                 {fmt(themeAvg[tf.key])}
               </td>
             ))}
-            <td colSpan={2} className="py-1.5 px-2 text-right text-gray-600 italic">theme avg</td>
+            <td colSpan={4} className="py-1.5 px-2 text-right text-gray-600 italic">theme avg</td>
           </tr>
         </tbody>
       </table>
@@ -699,7 +787,7 @@ const ThemeFinder = ({ mode = 'themes' }) => {
           )}
           <span className="text-xs text-gray-500">Data is delayed 15 mins</span>
           <button
-            onClick={fetchData}
+            onClick={() => fetchData()}
             disabled={loading}
             title="Refresh"
             className="p-1.5 rounded bg-secondary hover:bg-accent transition-colors disabled:opacity-40"
@@ -776,6 +864,7 @@ const ThemeFinder = ({ mode = 'themes' }) => {
                           theme={theme}
                           expanded={expandedThemeId === theme.id}
                           onExpand={() => toggleExpand(theme.id)}
+
                         />
                         <td className="py-3 pr-4 hidden lg:table-cell">
                           <SparkRank rankPoints={REVERSAL_TFS.map(key => rankByTf[key][theme.id])} />
@@ -824,6 +913,7 @@ const ThemeFinder = ({ mode = 'themes' }) => {
                           theme={theme}
                           expanded={expandedThemeId === theme.id}
                           onExpand={() => toggleExpand(theme.id)}
+
                         />
                         <td className="py-3 pr-4 hidden lg:table-cell">
                           <SparkRank rankPoints={REVERSAL_TFS.map(key => rankByTf[key][theme.id])} />
