@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, Fragment } from 'react';
 import { RefreshCw, ChevronDown, ChevronRight } from 'lucide-react';
 import { getStockPerformance, getPreMarketVolume } from '../services/yahooFinanceApi';
+import { fetchEarningsForTicker } from '../services/earningsService';
 
 // key  = internal identifier & React key
 // st   = Finviz "st" query param (empty string = intraday/1-day)
@@ -345,6 +346,7 @@ function getUSMarketPhase() {
 function StockDrillDown({ theme, tickerPerf, sortBy }) {
   const [extraPerf, setExtraPerf] = useState({});
   const [volData, setVolData] = useState({});
+  const [localEarnings, setLocalEarnings] = useState({});
   const [fetchingTickers, setFetchingTickers] = useState(new Set());
   const [hoveredTicker, setHoveredTicker] = useState(null);
   const marketPhase = getUSMarketPhase();
@@ -364,11 +366,13 @@ function StockDrillDown({ theme, tickerPerf, sortBy }) {
     (async () => {
       for (const ticker of allTickers) {
         if (cancelled) break;
-        // Fetch performance + volume in parallel with pre-market volume (if applicable)
+        // Fetch performance + volume + pre-market + earnings (if not in FMP data) in parallel
         const phase = getUSMarketPhase();
-        const [perf, pmVol] = await Promise.all([
+        const needsEarnings = !localEarnings[ticker];
+        const [perf, pmVol, earnings] = await Promise.all([
           getStockPerformance(ticker),
           phase === 'premarket' ? getPreMarketVolume(ticker) : Promise.resolve(null),
+          needsEarnings ? fetchEarningsForTicker(ticker) : Promise.resolve(null),
         ]);
         if (cancelled) break;
 
@@ -383,6 +387,11 @@ function StockDrillDown({ theme, tickerPerf, sortBy }) {
               pmVolume: pmVol,
             },
           }));
+        }
+
+        // Store per-ticker Yahoo earnings fallback
+        if (earnings) {
+          setLocalEarnings((prev) => ({ ...prev, [ticker]: earnings }));
         }
 
         // Only store perf data for tickers missing from Finviz
@@ -457,31 +466,54 @@ function StockDrillDown({ theme, tickerPerf, sortBy }) {
               className="text-right py-1.5 px-2 whitespace-nowrap cursor-help"
               title="Relative Volume — today's volume vs 3-month average daily volume (regular hours only)"
             >RVOL</th>
-            <th className="text-right py-1.5 px-2 text-blue-400 whitespace-nowrap">RS/SPY</th>
-            <th className="text-right py-1.5 px-2 text-purple-400 whitespace-nowrap">Comp RS</th>
+            <th
+              className="text-right py-1.5 px-2 text-blue-400 whitespace-nowrap cursor-help"
+              title="Relative Strength vs SPY — stock's performance minus SPY's performance for the selected timeframe"
+            >RS/SPY</th>
+            <th
+              className="text-right py-1.5 px-2 text-purple-400 whitespace-nowrap cursor-help"
+              title="Composite Relative Strength — weighted score: (1W × 3 + 1M × 2 + 3M × 1) minus the same for SPY. Higher = stronger momentum vs market."
+            >Comp RS</th>
           </tr>
         </thead>
         <tbody>
           {tickerData.map((d, i) => {
             const isLoading = fetchingTickers.has(d.ticker);
+            const earn = localEarnings[d.ticker] ?? null;
             return (
               <tr key={d.ticker} className="border-b border-accent/10 hover:bg-accent/10 transition-colors">
                 <td className="py-1.5 px-2 text-gray-600 font-mono">{i + 1}</td>
                 <td className="py-1.5 px-2">
-                  <a
-                    href={`https://www.tradingview.com/chart/?symbol=${d.ticker}`}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    onMouseEnter={() => setHoveredTicker(d.ticker)}
-                    onMouseLeave={() => setHoveredTicker(null)}
-                    className={`font-mono font-medium px-1 py-0.5 rounded transition-colors ${
-                      hoveredTicker === d.ticker
-                        ? 'bg-accent text-white ring-1 ring-accent'
-                        : 'text-gray-300 hover:bg-accent/30'
-                    }`}
-                  >
-                    {d.ticker}
-                  </a>
+                  <div className="flex items-center gap-1">
+                    <a
+                      href={`https://www.tradingview.com/chart/?symbol=${d.ticker}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      onMouseEnter={() => setHoveredTicker(d.ticker)}
+                      onMouseLeave={() => setHoveredTicker(null)}
+                      className={`font-mono font-medium px-1 py-0.5 rounded transition-colors ${
+                        hoveredTicker === d.ticker
+                          ? 'bg-accent text-white ring-1 ring-accent'
+                          : 'text-gray-300 hover:bg-accent/30'
+                      }`}
+                    >
+                      {d.ticker}
+                    </a>
+                    {earn && (
+                      <span
+                        className={`text-[10px] font-mono px-1 py-0.5 rounded cursor-help whitespace-nowrap ${
+                          earn.daysUntil <= 7
+                            ? 'bg-red-900/30 text-red-400'
+                            : earn.daysUntil <= 14
+                            ? 'bg-amber-900/30 text-amber-400'
+                            : 'bg-yellow-900/30 text-yellow-400'
+                        }`}
+                        title={`Earnings announcement in ${earn.daysUntil} day${earn.daysUntil !== 1 ? 's' : ''} (${new Date(earn.date + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })})\nConsider position sizing and stop-loss placement`}
+                      >
+                        {'\uD83D\uDCC5'} {earn.daysUntil}d
+                      </span>
+                    )}
+                  </div>
                 </td>
                 {TIMEFRAMES.map((tf) => (
                   <td key={tf.key} className={`py-1.5 px-2 text-right font-mono ${isLoading && d.perfs[tf.key] == null ? 'text-gray-600' : perfCls(d.perfs[tf.key])}`}>
@@ -645,6 +677,8 @@ const ThemeFinder = ({ mode = 'themes' }) => {
     setExpandedThemeId(null);
   }, [mode]);
 
+
+
   const toggleExpand = useCallback((themeId) => {
     setExpandedThemeId((prev) => (prev === themeId ? null : themeId));
   }, []);
@@ -717,6 +751,7 @@ const ThemeFinder = ({ mode = 'themes' }) => {
               theme={theme}
               tickerPerf={tickerPerf}
               sortBy={sortBy}
+
             />
           </div>
         </td>
@@ -961,6 +996,7 @@ const ThemeFinder = ({ mode = 'themes' }) => {
                           theme={theme}
                           expanded={expandedThemeId === theme.id}
                           onExpand={() => toggleExpand(theme.id)}
+
                         />
                         <td className="py-3 pr-4 hidden lg:table-cell">
                           <SparkRank rankPoints={REVERSAL_TFS.map(key => rankByTf[key][theme.id])} />
@@ -1089,6 +1125,7 @@ const ThemeFinder = ({ mode = 'themes' }) => {
                                         theme={theme}
                                         tickerPerf={tickerPerf}
                                         sortBy={sortBy}
+                          
                                       />
                                     </div>
                                   </td>

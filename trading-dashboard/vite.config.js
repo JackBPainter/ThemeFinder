@@ -18,6 +18,11 @@ export default defineConfig({
           'Referer': 'https://finviz.com/screener.ashx',
         },
       },
+      '/api/fmp': {
+        target: 'https://financialmodelingprep.com',
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/api\/fmp/, ''),
+      },
       '/api/yahoo': {
         target: 'https://query2.finance.yahoo.com',
         changeOrigin: true,
