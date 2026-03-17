@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useMemo, Fragment } from 'react';
 import { RefreshCw, ChevronDown, ChevronRight, TrendingUp, TrendingDown, Minus } from 'lucide-react';
-import { getStockPerformance, getPreMarketVolume } from '../services/yahooFinanceApi';
+import { getStockPerformance } from '../services/yahooFinanceApi';
 import { fetchEarningsForTicker } from '../services/earningsService';
 
 // key  = internal identifier & React key
@@ -366,11 +366,20 @@ function SparkRank({ rankPoints }) {
 // Primary data: Finviz merged nodes (themes + sectors), already in tickerPerf.
 // Fallback: Yahoo Finance via Vite proxy for any tickers absent from both Finviz maps.
 function getUSMarketPhase() {
-  const now = new Date();
-  const et = new Date(now.toLocaleString('en-US', { timeZone: 'America/New_York' }));
-  const day = et.getDay();
-  if (day === 0 || day === 6) return 'closed';
-  const mins = et.getHours() * 60 + et.getMinutes();
+  // Use Intl.DateTimeFormat to reliably get ET hour/minute/day
+  const fmt = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York',
+    hour: 'numeric', minute: 'numeric', weekday: 'short',
+    hour12: false,
+  });
+  const parts = Object.fromEntries(
+    fmt.formatToParts(new Date()).map((p) => [p.type, p.value])
+  );
+  const day = parts.weekday; // "Mon", "Tue", etc.
+  const hour = parseInt(parts.hour, 10);
+  const minute = parseInt(parts.minute, 10);
+  const mins = hour * 60 + minute;
+  if (day === 'Sat' || day === 'Sun') return 'closed';
   if (mins >= 240 && mins < 570) return 'premarket'; // 4:00 AM – 9:30 AM ET
   if (mins >= 570 && mins < 960) return 'open';       // 9:30 AM – 4:00 PM ET
   return 'closed';
@@ -383,7 +392,6 @@ function StockDrillDown({ theme, tickerPerf, sortBy }) {
   const [fetchingTickers, setFetchingTickers] = useState(new Set());
   const [hoveredTicker, setHoveredTicker] = useState(null);
   const marketPhase = getUSMarketPhase();
-  const showPM = marketPhase === 'premarket';
 
   useEffect(() => {
     let cancelled = false;
@@ -402,9 +410,8 @@ function StockDrillDown({ theme, tickerPerf, sortBy }) {
         // Fetch performance + volume + pre-market + earnings (if not in FMP data) in parallel
         const phase = getUSMarketPhase();
         const needsEarnings = !localEarnings[ticker];
-        const [perf, pmVol, earnings] = await Promise.all([
+        const [perf, earnings] = await Promise.all([
           getStockPerformance(ticker),
-          phase === 'premarket' ? getPreMarketVolume(ticker) : Promise.resolve(null),
           needsEarnings ? fetchEarningsForTicker(ticker) : Promise.resolve(null),
         ]);
         if (cancelled) break;
@@ -417,7 +424,6 @@ function StockDrillDown({ theme, tickerPerf, sortBy }) {
               volume: perf.volume,
               avgVolume: perf.avgVolume,
               relVolume: perf.relVolume,
-              pmVolume: pmVol,
             },
           }));
         }
@@ -483,12 +489,6 @@ function StockDrillDown({ theme, tickerPerf, sortBy }) {
                 {tf.short}
               </th>
             ))}
-            {showPM && (
-              <th
-                className="text-right py-1.5 px-2 whitespace-nowrap cursor-help text-amber-400"
-                title="Pre-market volume (4:00 AM – 9:30 AM ET)"
-              >PM Vol</th>
-            )}
             <th
               className="text-right py-1.5 px-2 whitespace-nowrap cursor-help"
               title={marketPhase === 'open'
@@ -557,17 +557,6 @@ function StockDrillDown({ theme, tickerPerf, sortBy }) {
                     {isLoading && d.perfs[tf.key] == null ? '…' : fmt(d.perfs[tf.key])}
                   </td>
                 ))}
-                {showPM && (
-                  <td className="py-1.5 px-2 text-right font-mono text-amber-400/80">
-                    {(() => {
-                      const pm = volData[d.ticker]?.pmVolume;
-                      if (pm == null) return fetchingTickers.has(d.ticker) ? '…' : '-';
-                      if (pm >= 1e6) return `${(pm / 1e6).toFixed(1)}M`;
-                      if (pm >= 1e3) return `${(pm / 1e3).toFixed(0)}K`;
-                      return pm.toLocaleString();
-                    })()}
-                  </td>
-                )}
                 <td className="py-1.5 px-2 text-right font-mono text-gray-400">
                   {(() => {
                     const vd = volData[d.ticker];

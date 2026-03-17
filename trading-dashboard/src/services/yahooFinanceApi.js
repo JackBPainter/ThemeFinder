@@ -152,36 +152,41 @@ export async function getStockPerformance(ticker) {
  * Returns the pre-market volume as a number, or null on error / no data.
  */
 export async function getPreMarketVolume(ticker) {
+  const pmUrl = `${BASE_URL}/v8/finance/chart/${encodeURIComponent(ticker)}?range=1d&interval=1m&includePrePost=true`;
   try {
-    const res = await fetch(
-      `${BASE_URL}/v8/finance/chart/${encodeURIComponent(ticker)}?range=1d&interval=5m&includePrePost=true`,
-    );
+    const res = await fetch(pmUrl);
     if (!res.ok) return null;
 
     const data = await res.json();
     const result = data?.chart?.result?.[0];
     if (!result) return null;
 
+    const meta = result.meta ?? {};
+
+    // Strategy 1: Use meta.preMarketVolume if available
+    if (meta.preMarketVolume != null && meta.preMarketVolume > 0) {
+      return meta.preMarketVolume;
+    }
+
+    // Strategy 2: Sum volume from pre-market 1-minute bars
     const timestamps = result.timestamp;
     const volumes = result.indicators?.quote?.[0]?.volume;
     if (!timestamps || !volumes) return null;
 
-    // Market open is 9:30 AM ET = 13:30 UTC (during EST) or 13:30 UTC (during EDT)
-    // Use the meta.tradingPeriods or gmtoffset to determine the cutoff
-    const gmtOffset = result.meta?.gmtoffset ?? -18000; // default EST (-5h)
-    const marketOpenLocalSecs = 9 * 3600 + 30 * 60; // 9:30 AM in seconds from midnight
+    const gmtOffset = meta.gmtoffset ?? -14400;
+    const marketOpenLocalSecs = 9 * 3600 + 30 * 60; // 9:30 AM ET
 
     let pmVolume = 0;
     for (let i = 0; i < timestamps.length; i++) {
-      // Convert timestamp to local exchange seconds-from-midnight
       const localSecs = ((timestamps[i] + gmtOffset) % 86400 + 86400) % 86400;
-      if (localSecs < marketOpenLocalSecs) {
-        pmVolume += (volumes[i] ?? 0);
+      if (localSecs >= 4 * 3600 && localSecs < marketOpenLocalSecs && volumes[i] != null) {
+        pmVolume += volumes[i];
       }
     }
 
     return pmVolume > 0 ? pmVolume : null;
   } catch (err) {
+    console.warn(`[pmvol] ${ticker}: error`, err.message);
     return null;
   }
 }
