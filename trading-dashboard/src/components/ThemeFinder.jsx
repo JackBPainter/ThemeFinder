@@ -1,5 +1,5 @@
-import { useState, useEffect, useCallback, Fragment } from 'react';
-import { RefreshCw, ChevronDown, ChevronRight } from 'lucide-react';
+import { useState, useEffect, useCallback, useMemo, Fragment } from 'react';
+import { RefreshCw, ChevronDown, ChevronRight, TrendingUp, TrendingDown, Minus } from 'lucide-react';
 import { getStockPerformance, getPreMarketVolume } from '../services/yahooFinanceApi';
 import { fetchEarningsForTicker } from '../services/earningsService';
 
@@ -19,12 +19,45 @@ const TABS = [
   { key: 'performance', label: 'Performance'   },
   { key: 'ranking',     label: 'Ranking'       },
   { key: 'golden',      label: 'Golden Themes' },
+  { key: 'momentum',    label: 'Momentum'      },
   { key: 'reversals',   label: 'Reversals'     },
 ];
 
 // Timeframes used for reversal analysis (1Y → 6M → 3M → 1M, oldest first)
 const REVERSAL_TFS = ['w52', 'w26', 'w13', 'w4'];
 const REVERSAL_TF_LABELS = { w52: '1Y', w26: '6M', w13: '3M', w4: '1M' };
+
+// Momentum weight presets — higher weight = more influence on the score
+const MOMENTUM_PRESETS = [
+  {
+    key: 'aggressive',
+    label: 'Aggressive',
+    shortLabel: 'Aggr',
+    description: 'Heaviest on 1D/1W — for fast-moving momentum plays',
+    weights: { d1: 4, w1: 3, w4: 1, w13: 0, w26: 0, w52: 0 },
+  },
+  {
+    key: 'balanced',
+    label: 'Balanced',
+    shortLabel: 'Bal',
+    description: 'Emphasises 1W/1M with some 3M context',
+    weights: { d1: 1, w1: 3, w4: 2, w13: 1, w26: 0, w52: 0 },
+  },
+  {
+    key: 'swing',
+    label: 'Swing',
+    shortLabel: 'Swing',
+    description: 'Core swing window — 1W through 3M, ignores noise and long-term',
+    weights: { d1: 0, w1: 3, w4: 2, w13: 1, w26: 0, w52: 0 },
+  },
+  {
+    key: 'meanReversion',
+    label: 'Mean Reversion',
+    shortLabel: 'MeanRev',
+    description: 'Inverted — favours long-term strength, finds laggards recovering',
+    weights: { d1: 0, w1: 0, w4: 1, w13: 2, w26: 3, w52: 4 },
+  },
+];
 
 // Short descriptions for Finviz industry sub-sectors (used in sector mode description column)
 const SECTOR_DESCRIPTIONS = {
@@ -502,15 +535,19 @@ function StockDrillDown({ theme, tickerPerf, sortBy }) {
                     {earn && (
                       <span
                         className={`text-[10px] font-mono px-1 py-0.5 rounded cursor-help whitespace-nowrap ${
-                          earn.daysUntil <= 7
+                          earn.daysUntil <= 0
+                            ? 'bg-red-900/40 text-red-300 font-semibold'
+                            : earn.daysUntil <= 7
                             ? 'bg-red-900/30 text-red-400'
                             : earn.daysUntil <= 14
                             ? 'bg-amber-900/30 text-amber-400'
-                            : 'bg-yellow-900/30 text-yellow-400'
+                            : earn.daysUntil <= 28
+                            ? 'bg-yellow-900/30 text-yellow-400'
+                            : 'bg-gray-800/40 text-gray-400'
                         }`}
-                        title={`Earnings announcement in ${earn.daysUntil} day${earn.daysUntil !== 1 ? 's' : ''} (${new Date(earn.date + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })})\nConsider position sizing and stop-loss placement`}
+                        title={`Earnings ${earn.daysUntil <= 0 ? 'today/just reported' : `in ${earn.daysUntil} day${earn.daysUntil !== 1 ? 's' : ''}`} (${new Date(earn.date + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}${earn.timing ? ' ' + earn.timing : ''})\nConsider position sizing and stop-loss placement`}
                       >
-                        {'\uD83D\uDCC5'} {earn.daysUntil}d
+                        {earn.daysUntil <= 0 ? 'ER today' : `ER ${earn.daysUntil}D`}
                       </span>
                     )}
                   </div>
@@ -584,6 +621,53 @@ function StockDrillDown({ theme, tickerPerf, sortBy }) {
   );
 }
 
+// Momentum preset pill selector (shared between Golden and Momentum tabs)
+function PresetPills({ active, onChange }) {
+  return (
+    <div className="flex items-center gap-1">
+      {MOMENTUM_PRESETS.map((p) => (
+        <button
+          key={p.key}
+          onClick={() => onChange(p.key)}
+          className={`px-2 py-0.5 rounded text-[10px] font-medium transition-colors ${
+            active === p.key
+              ? 'bg-purple-600 text-white'
+              : 'bg-secondary text-gray-400 hover:text-white'
+          }`}
+          title={p.description}
+        >
+          {p.shortLabel}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+// Momentum acceleration indicator arrow
+function AccelIndicator({ value }) {
+  if (value == null) return <span className="text-gray-600">—</span>;
+  let Icon, cls, label;
+  if (value > 0.05) {
+    Icon = TrendingUp; cls = 'text-green-400 font-semibold'; label = 'Momentum accelerating strongly';
+  } else if (value > 0.01) {
+    Icon = TrendingUp; cls = 'text-green-500'; label = 'Momentum accelerating';
+  } else if (value < -0.05) {
+    Icon = TrendingDown; cls = 'text-red-400 font-semibold'; label = 'Momentum decelerating sharply';
+  } else if (value < -0.01) {
+    Icon = TrendingDown; cls = 'text-orange-400'; label = 'Momentum decelerating';
+  } else {
+    Icon = Minus; cls = 'text-gray-500'; label = 'Momentum steady';
+  }
+  return (
+    <span className={`inline-flex items-center gap-0.5 ${cls}`} title={label}>
+      <Icon size={13} />
+      <span className="text-[10px] font-mono hidden xl:inline">
+        {value > 0 ? '+' : ''}{value.toFixed(2)}
+      </span>
+    </span>
+  );
+}
+
 // Shared leading columns (chevron, rank, theme/sector link, description)
 function LeadingCells({ rank, theme, expanded = false, onExpand = () => {} }) {
   return (
@@ -624,6 +708,9 @@ const ThemeFinder = ({ mode = 'themes' }) => {
   const [trimStart, setTrimStart] = useState(0);
   const [trimEnd, setTrimEnd] = useState(0);
   const [expandedThemeId, setExpandedThemeId] = useState(null);
+  const [momentumPreset, setMomentumPreset] = useState('swing');
+  const [goldenSortBy, setGoldenSortBy] = useState('avgRank');
+  const [momentumSortBy, setMomentumSortBy] = useState('rank'); // 'rank' | 'accel' | 'perf'
 
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -710,15 +797,73 @@ const ThemeFinder = ({ mode = 'themes' }) => {
   const safeStart = Math.min(trimStart, maxTrim - trimEnd);
   const safeEnd = Math.min(trimEnd, maxTrim - trimStart);
   const GOLDEN_TIMEFRAMES = TIMEFRAMES.slice(safeStart, TIMEFRAMES.length - safeEnd || undefined);
+  // Momentum scoring
+  const activePreset = MOMENTUM_PRESETS.find((p) => p.key === momentumPreset) || MOMENTUM_PRESETS[2];
+
+  const momentumData = useMemo(() => {
+    const result = {};
+    const weights = activePreset.weights;
+    // Timeframes with weight > 0, ordered longest → shortest (for accel calc)
+    const weightedTfs = TIMEFRAMES.filter((tf) => weights[tf.key] > 0);
+    const weightedTfsLongFirst = [...weightedTfs].reverse();
+
+    for (const t of themes) {
+      // Rank-based score
+      let rankWSum = 0, rankWDiv = 0;
+      for (const tf of weightedTfs) {
+        const r = rankByTf[tf.key][t.id];
+        if (r) { rankWSum += r.rank * weights[tf.key]; rankWDiv += weights[tf.key]; }
+      }
+      const mtmRankScore = rankWDiv > 0 ? rankWSum / rankWDiv : null;
+
+      // Performance-based score
+      let perfWSum = 0, perfWDiv = 0;
+      for (const tf of weightedTfs) {
+        const p = t.perf[tf.key];
+        if (p != null) { perfWSum += p * weights[tf.key]; perfWDiv += weights[tf.key]; }
+      }
+      const mtmPerfScore = perfWDiv > 0 ? perfWSum / perfWDiv : null;
+
+      // Acceleration — slope of rank from longest to shortest within weighted TFs
+      let mtmAccel = null;
+      const accelRanks = weightedTfsLongFirst
+        .map((tf) => rankByTf[tf.key][t.id]?.rank)
+        .filter((v) => v != null);
+      if (accelRanks.length >= 2) {
+        const total = rankByTf[weightedTfs[0].key][t.id]?.total || themes.length;
+        const slope = (accelRanks[0] - accelRanks[accelRanks.length - 1]) / (accelRanks.length - 1);
+        mtmAccel = Math.round((slope / total) * 100) / 100;
+      }
+
+      result[t.id] = { mtmRankScore, mtmPerfScore, mtmAccel };
+    }
+    return result;
+  }, [themes, rankByTf, activePreset]);
+
+  const momentumRows = useMemo(() =>
+    themes
+      .map((t) => ({ ...t, ...momentumData[t.id] }))
+      .filter((t) => t.mtmRankScore != null)
+      .sort((a, b) => {
+        if (momentumSortBy === 'accel') return (b.mtmAccel ?? -999) - (a.mtmAccel ?? -999);
+        if (momentumSortBy === 'perf') return (b.mtmPerfScore ?? -999) - (a.mtmPerfScore ?? -999);
+        return a.mtmRankScore - b.mtmRankScore;
+      })
+      .slice(0, 20),
+    [themes, momentumData, momentumSortBy],
+  );
+
   const goldenRows = themes
     .map((t) => {
       const ranks = GOLDEN_TIMEFRAMES.map((tf) => rankByTf[tf.key][t.id]?.rank).filter((v) => v != null);
       if (ranks.length === 0) return null;
       const avgRank = ranks.reduce((a, b) => a + b, 0) / ranks.length;
-      return { ...t, avgRank, rankCount: ranks.length };
+      return { ...t, avgRank, rankCount: ranks.length, mtmRankScore: momentumData[t.id]?.mtmRankScore };
     })
     .filter(Boolean)
-    .sort((a, b) => a.avgRank - b.avgRank)
+    .sort((a, b) => goldenSortBy === 'mtmRank'
+      ? (a.mtmRankScore ?? 999) - (b.mtmRankScore ?? 999)
+      : a.avgRank - b.avgRank)
     .slice(0, 20);
 
   const reversalData = themes
@@ -784,11 +929,21 @@ const ThemeFinder = ({ mode = 'themes' }) => {
             ? `Top 20 ${noun}s by ${TIMEFRAMES.find(tf => tf.key === sortBy)?.label} · rank shown across all timeframes`
             : activeTab === 'golden'
             ? `Top 20 ${noun}s${themes.length ? ` (${themes.length})` : ''} with the best average rank across all timeframes`
+            : activeTab === 'momentum'
+            ? `Top 20 ${noun}s by momentum · ${activePreset.label} weighting`
             : activeTab === 'reversals'
             ? `Mean-reversion candidates · ranked by divergence between 1M and 1Y performance`
             : `Top 20 performing ${noun}s · avg of constituents`}
         </h2>
         <div className="flex items-center gap-2">
+          {(activeTab === 'golden' || activeTab === 'momentum') && (
+            <div className="flex items-center gap-1 mr-2">
+              <PresetPills active={momentumPreset} onChange={setMomentumPreset} />
+            </div>
+          )}
+          {activeTab === 'momentum' && (
+            <span className="text-[10px] text-gray-500 mr-2">{activePreset.description}</span>
+          )}
           {activeTab === 'golden' && (
             <div className="flex items-center gap-1 text-xs text-gray-400">
               <span className="mr-1">Timeframes:</span>
@@ -982,7 +1137,16 @@ const ThemeFinder = ({ mode = 'themes' }) => {
                     {GOLDEN_TIMEFRAMES.map((tf) => (
                       <th key={tf.key} className="text-right py-2 px-3">{tf.label}</th>
                     ))}
-                    <th className="text-right py-2 px-3 text-yellow-400">Avg Rank</th>
+                    <th
+                      className={`text-right py-2 px-3 cursor-pointer transition-colors ${goldenSortBy === 'avgRank' ? 'text-yellow-400' : 'text-gray-500 hover:text-yellow-400'}`}
+                      onClick={() => setGoldenSortBy('avgRank')}
+                      title="Sort by average rank"
+                    >Avg Rank{goldenSortBy === 'avgRank' ? ' ▼' : ''}</th>
+                    <th
+                      className={`text-right py-2 px-3 cursor-pointer transition-colors ${goldenSortBy === 'mtmRank' ? 'text-purple-400' : 'text-gray-500 hover:text-purple-400'}`}
+                      onClick={() => setGoldenSortBy('mtmRank')}
+                      title={`Momentum score (${activePreset.label} preset)`}
+                    >Mtm{goldenSortBy === 'mtmRank' ? ' ▼' : ''}</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -996,7 +1160,6 @@ const ThemeFinder = ({ mode = 'themes' }) => {
                           theme={theme}
                           expanded={expandedThemeId === theme.id}
                           onExpand={() => toggleExpand(theme.id)}
-
                         />
                         <td className="py-3 pr-4 hidden lg:table-cell">
                           <SparkRank rankPoints={REVERSAL_TFS.map(key => rankByTf[key][theme.id])} />
@@ -1012,10 +1175,95 @@ const ThemeFinder = ({ mode = 'themes' }) => {
                         <td className="py-3 px-3 text-right font-mono text-xs text-yellow-400 font-semibold">
                           {ordinal(Math.round(theme.avgRank))}
                         </td>
+                        <td className="py-3 px-3 text-right font-mono text-xs text-purple-400 font-semibold">
+                          {theme.mtmRankScore != null ? ordinal(Math.round(theme.mtmRankScore)) : '-'}
+                        </td>
                       </tr>
                       <ExpandRow theme={theme} />
                     </Fragment>
                   ))}
+                </tbody>
+              </table>
+            )}
+
+            {/* Momentum tab */}
+            {activeTab === 'momentum' && (
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="text-gray-400 border-b border-accent sticky top-0 bg-primary z-10">
+                    <th className="text-left py-2 pr-3 w-8">#</th>
+                    <th className="text-left py-2 pr-4">{Noun}</th>
+                    <th className="text-left py-2 pr-4 hidden md:table-cell">Description</th>
+                    <th className="text-left py-2 pr-4 hidden lg:table-cell">Trend</th>
+                    <th
+                      className={`text-center py-2 px-2 cursor-pointer transition-colors ${momentumSortBy === 'accel' ? 'text-green-400' : 'text-gray-400 hover:text-green-400'}`}
+                      onClick={() => setMomentumSortBy('accel')}
+                      title="Momentum acceleration — measures whether rank is improving (↗) or worsening (↘) from longer to shorter timeframes. Positive = accelerating, negative = decelerating."
+                    >Accel{momentumSortBy === 'accel' ? ' ▼' : ''}</th>
+                    <th
+                      className={`text-right py-2 px-3 cursor-pointer transition-colors ${momentumSortBy === 'rank' ? 'text-purple-400' : 'text-gray-400 hover:text-purple-400'}`}
+                      onClick={() => setMomentumSortBy('rank')}
+                      title="Weighted average rank across the active preset's timeframes. Lower = stronger momentum. Each timeframe's rank is multiplied by its weight before averaging."
+                    >Rank{momentumSortBy === 'rank' ? ' ▼' : ''}</th>
+                    <th
+                      className={`text-right py-2 px-3 cursor-pointer transition-colors ${momentumSortBy === 'perf' ? 'text-white' : 'text-gray-400 hover:text-white'}`}
+                      onClick={() => setMomentumSortBy('perf')}
+                      title="Weighted average performance (%) across the active preset's timeframes. Shows the actual magnitude of the move — a theme can be ranked 1st with +0.5% or +8%, this column reveals the difference."
+                    >Perf{momentumSortBy === 'perf' ? ' ▼' : ''}</th>
+                    {TIMEFRAMES.map((tf) => {
+                      const w = activePreset.weights[tf.key];
+                      return (
+                        <th key={tf.key} className={`text-right py-2 px-3 ${w > 0 ? 'text-gray-300' : 'text-gray-600'}`}>
+                          {tf.label}
+                          {w > 0 && <span className="text-purple-400/60 text-[9px] ml-0.5">{'\u00d7'}{w}</span>}
+                        </th>
+                      );
+                    })}
+                  </tr>
+                </thead>
+                <tbody>
+                  {momentumRows.map((theme, i) => {
+                    const isTop5 = i < 5;
+                    const strongAccel = theme.mtmAccel != null && theme.mtmAccel > 0.05;
+                    const strongDecel = theme.mtmAccel != null && theme.mtmAccel < -0.05;
+                    return (
+                      <Fragment key={theme.id}>
+                        <tr className={`border-b border-accent/20 hover:bg-secondary/50 transition-colors ${
+                          expandedThemeId === theme.id ? 'bg-secondary/40' : ''
+                        } ${isTop5 ? 'border-l-2 border-l-purple-500' : ''
+                        } ${strongAccel ? 'bg-green-900/10' : strongDecel ? 'bg-red-900/10' : ''}`}>
+                          <LeadingCells
+                            rank={i + 1}
+                            theme={theme}
+                            expanded={expandedThemeId === theme.id}
+                            onExpand={() => toggleExpand(theme.id)}
+                          />
+                          <td className="py-3 pr-4 hidden lg:table-cell">
+                            <SparkRank rankPoints={REVERSAL_TFS.map(key => rankByTf[key][theme.id])} />
+                          </td>
+                          <td className="py-3 px-2 text-center">
+                            <AccelIndicator value={theme.mtmAccel} />
+                          </td>
+                          <td className="py-3 px-3 text-right font-mono text-xs text-purple-400 font-semibold">
+                            {ordinal(Math.round(theme.mtmRankScore))}
+                          </td>
+                          <td className={`py-3 px-3 text-right font-mono text-xs ${perfCls(theme.mtmPerfScore)}`}>
+                            {theme.mtmPerfScore != null ? fmt(theme.mtmPerfScore) : '-'}
+                          </td>
+                          {TIMEFRAMES.map((tf) => {
+                            const r = rankByTf[tf.key][theme.id];
+                            const w = activePreset.weights[tf.key];
+                            return (
+                              <td key={tf.key} className={`py-3 px-3 text-right font-mono text-xs ${w > 0 ? 'text-gray-300' : 'text-gray-600'}`}>
+                                {r ? ordinal(r.rank) : '-'}
+                              </td>
+                            );
+                          })}
+                        </tr>
+                        <ExpandRow theme={theme} />
+                      </Fragment>
+                    );
+                  })}
                 </tbody>
               </table>
             )}
