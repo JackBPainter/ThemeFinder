@@ -49,6 +49,7 @@ function parseScreenerHtml(html, pageNum) {
   const tickerCol = colMap['Ticker'];
   const volumeCol = colMap['Volume'];
   const changeCol = colMap['Change'];
+  const mktCapCol = colMap['Market Cap'];
 
   if (tickerCol === undefined) throw new Error('Missing Ticker column');
 
@@ -80,10 +81,24 @@ function parseScreenerHtml(html, pageNum) {
     const change = parseNum(changeCol);
     if (volume == null && change == null) continue;
 
+    // Market Cap: Finviz formats as e.g. "548.23B", "12.34M", "1.23T"
+    let marketCap = null;
+    if (mktCapCol !== undefined && cells[mktCapCol]) {
+      const mcTxt = cells[mktCapCol].textContent.trim();
+      const mcMatch = mcTxt.match(/^([\d.]+)([BMTK])?$/i);
+      if (mcMatch) {
+        const num = parseFloat(mcMatch[1]);
+        const suffix = (mcMatch[2] || '').toUpperCase();
+        const mult = suffix === 'T' ? 1e12 : suffix === 'B' ? 1e9 : suffix === 'M' ? 1e6 : suffix === 'K' ? 1e3 : 1;
+        marketCap = num * mult;
+      }
+    }
+
     results.push({
       ticker: rawTicker,
       volume: volume != null ? Math.round(volume) : null,
       change: change != null ? change : null,
+      marketCap,
     });
   }
 

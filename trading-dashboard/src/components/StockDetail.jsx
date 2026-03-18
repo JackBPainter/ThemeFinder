@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { ArrowLeft, ExternalLink } from 'lucide-react';
 import { getStockPerformance } from '../services/yahooFinanceApi';
-import { fetchEarningsForTicker } from '../services/earningsService';
+import { fetchFinvizSnapshot } from '../services/earningsService';
 
 let tvInstanceCount = 0;
 
@@ -44,12 +44,13 @@ function StockDetail({ ticker, onBack }) {
     Promise.all([
       getStockPerformance(ticker),
       getStockPerformance('SPY'),
-      fetchEarningsForTicker(ticker),
-    ]).then(([p, spy, e]) => {
+      fetchFinvizSnapshot(ticker),
+    ]).then(([p, spy, snap]) => {
       if (cancelled) return;
       if (p && spy) p.spyPerf = spy;
+      if (p && snap?.marketCap) p.marketCap = snap.marketCap;
       setPerf(p);
-      setEarnings(e);
+      setEarnings(snap?.earnings ?? null);
       setLoading(false);
     });
 

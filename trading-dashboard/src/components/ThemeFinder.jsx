@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useMemo, Fragment } from 'react';
 import { RefreshCw, ChevronDown, ChevronRight, TrendingUp, TrendingDown, Minus } from 'lucide-react';
 import { getStockPerformance } from '../services/yahooFinanceApi';
-import { fetchEarningsForTicker } from '../services/earningsService';
+import { fetchFinvizSnapshot } from '../services/earningsService';
 
 // key  = internal identifier & React key
 // st   = Finviz "st" query param (empty string = intraday/1-day)
@@ -407,16 +407,15 @@ function StockDrillDown({ theme, tickerPerf, sortBy }) {
     (async () => {
       for (const ticker of allTickers) {
         if (cancelled) break;
-        // Fetch performance + volume + pre-market + earnings (if not in FMP data) in parallel
-        const phase = getUSMarketPhase();
-        const needsEarnings = !localEarnings[ticker];
-        const [perf, earnings] = await Promise.all([
+        // Fetch performance + Finviz snapshot (earnings + market cap) in parallel
+        const needsSnapshot = !localEarnings[ticker];
+        const [perf, snapshot] = await Promise.all([
           getStockPerformance(ticker),
-          needsEarnings ? fetchEarningsForTicker(ticker) : Promise.resolve(null),
+          needsSnapshot ? fetchFinvizSnapshot(ticker) : Promise.resolve(null),
         ]);
         if (cancelled) break;
 
-        // Store volume data for all tickers
+        // Store volume + price + market cap for all tickers
         if (perf) {
           setVolData((prev) => ({
             ...prev,
@@ -424,13 +423,20 @@ function StockDrillDown({ theme, tickerPerf, sortBy }) {
               volume: perf.volume,
               avgVolume: perf.avgVolume,
               relVolume: perf.relVolume,
+              price: perf.price,
+              marketCap: snapshot?.marketCap ?? prev[ticker]?.marketCap ?? null,
             },
+          }));
+        } else if (snapshot?.marketCap) {
+          setVolData((prev) => ({
+            ...prev,
+            [ticker]: { ...prev[ticker], marketCap: snapshot.marketCap },
           }));
         }
 
-        // Store per-ticker Yahoo earnings fallback
-        if (earnings) {
-          setLocalEarnings((prev) => ({ ...prev, [ticker]: earnings }));
+        // Store earnings
+        if (snapshot?.earnings) {
+          setLocalEarnings((prev) => ({ ...prev, [ticker]: snapshot.earnings }));
         }
 
         // Only store perf data for tickers missing from Finviz
@@ -481,6 +487,8 @@ function StockDrillDown({ theme, tickerPerf, sortBy }) {
           <tr className="text-gray-500 border-b border-accent/30">
             <th className="text-left py-1.5 px-2 w-5">#</th>
             <th className="text-left py-1.5 px-2">Ticker</th>
+            <th className="text-right py-1.5 px-2">Price</th>
+            <th className="text-right py-1.5 px-2">Mkt Cap</th>
             {TIMEFRAMES.map((tf) => (
               <th
                 key={tf.key}
@@ -552,6 +560,23 @@ function StockDrillDown({ theme, tickerPerf, sortBy }) {
                     )}
                   </div>
                 </td>
+                <td className="py-1.5 px-2 text-right font-mono text-gray-300">
+                  {(() => {
+                    const p = volData[d.ticker]?.price;
+                    if (p == null) return fetchingTickers.has(d.ticker) ? '…' : '-';
+                    return `$${p.toFixed(2)}`;
+                  })()}
+                </td>
+                <td className="py-1.5 px-2 text-right font-mono text-gray-400">
+                  {(() => {
+                    const mc = volData[d.ticker]?.marketCap;
+                    if (mc == null) return fetchingTickers.has(d.ticker) ? '…' : '-';
+                    if (mc >= 1e12) return `$${(mc / 1e12).toFixed(2)}T`;
+                    if (mc >= 1e9) return `$${(mc / 1e9).toFixed(1)}B`;
+                    if (mc >= 1e6) return `$${(mc / 1e6).toFixed(0)}M`;
+                    return `$${(mc / 1e3).toFixed(0)}K`;
+                  })()}
+                </td>
                 {TIMEFRAMES.map((tf) => (
                   <td key={tf.key} className={`py-1.5 px-2 text-right font-mono ${isLoading && d.perfs[tf.key] == null ? 'text-gray-600' : perfCls(d.perfs[tf.key])}`}>
                     {isLoading && d.perfs[tf.key] == null ? '…' : fmt(d.perfs[tf.key])}
@@ -597,6 +622,8 @@ function StockDrillDown({ theme, tickerPerf, sortBy }) {
           <tr className="border-t border-accent/30 bg-accent/5">
             <td className="py-1.5 px-2 text-gray-600 font-mono">—</td>
             <td className="py-1.5 px-2 text-gray-500 italic">avg</td>
+            <td></td>
+            <td></td>
             {TIMEFRAMES.map((tf) => (
               <td key={tf.key} className="py-1.5 px-2 text-right font-mono text-gray-500 italic">
                 {fmt(themeAvg[tf.key])}
