@@ -137,6 +137,7 @@ export async function getStockPerformance(ticker) {
       volume,
       avgVolume,
       relVolume,
+      price: last,
     };
   } catch (err) {
     console.warn(`[yahooApi] getStockPerformance error for ${ticker}:`, err.message);

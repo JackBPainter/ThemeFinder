@@ -1,9 +1,32 @@
-import { useState } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import ThemeFinder from './components/ThemeFinder';
+import StockDetail from './components/StockDetail';
 import { TrendingUp } from 'lucide-react';
 
 function App() {
   const [mode, setMode] = useState('themes'); // 'themes' | 'sectors'
+  const [stockTicker, setStockTicker] = useState(null);
+
+  // Check URL for ?stock=TICKER on mount and on popstate (back/forward)
+  useEffect(() => {
+    const readParam = () => {
+      const params = new URLSearchParams(window.location.search);
+      setStockTicker(params.get('stock') || null);
+    };
+    readParam();
+    window.addEventListener('popstate', readParam);
+    return () => window.removeEventListener('popstate', readParam);
+  }, []);
+
+  const handleBack = useCallback(() => {
+    window.history.pushState({}, '', window.location.pathname);
+    setStockTicker(null);
+  }, []);
+
+  // Show stock detail page if ?stock= param is present
+  if (stockTicker) {
+    return <StockDetail ticker={stockTicker} onBack={handleBack} />;
+  }
 
   return (
     <div className="min-h-screen bg-[#0a0e27] text-white">

@@ -519,7 +519,7 @@ function StockDrillDown({ theme, tickerPerf, sortBy }) {
                 <td className="py-1.5 px-2">
                   <div className="flex items-center gap-1">
                     <a
-                      href={`https://www.tradingview.com/chart/?symbol=${d.ticker}`}
+                      href={`?stock=${d.ticker}`}
                       target="_blank"
                       rel="noopener noreferrer"
                       onMouseEnter={() => setHoveredTicker(d.ticker)}
@@ -1327,7 +1327,7 @@ const ThemeFinder = ({ mode = 'themes' }) => {
                                       {theme.tickers.slice(0, 6).map((ticker) => (
                                         <a
                                           key={ticker}
-                                          href={`https://www.tradingview.com/chart/?symbol=${ticker}`}
+                                          href={`?stock=${ticker}`}
                                           target="_blank"
                                           rel="noopener noreferrer"
                                           onMouseEnter={() => setHoveredTicker(ticker)}
