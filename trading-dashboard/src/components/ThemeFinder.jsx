@@ -18,7 +18,7 @@ const TIMEFRAMES = [
 const TABS = [
   { key: 'performance', label: 'Performance'   },
   { key: 'ranking',     label: 'Ranking'       },
-  { key: 'golden',      label: 'Golden Themes' },
+  // { key: 'golden',      label: 'Golden Themes' },
   { key: 'momentum',    label: 'Momentum'      },
   { key: 'reversals',   label: 'Reversals'     },
 ];
@@ -943,8 +943,8 @@ const ThemeFinder = ({ mode = 'themes' }) => {
         <h2 className="text-sm font-bold flex items-center gap-2">
           {activeTab === 'ranking'
             ? `Top 20 ${noun}s by ${TIMEFRAMES.find(tf => tf.key === sortBy)?.label} · rank shown across all timeframes`
-            : activeTab === 'golden'
-            ? `Top 20 ${noun}s${themes.length ? ` (${themes.length})` : ''} with the best average rank across all timeframes`
+            // : activeTab === 'golden'
+            // ? `Top 20 ${noun}s${themes.length ? ` (${themes.length})` : ''} with the best average rank across all timeframes`
             : activeTab === 'momentum'
             ? `Top 20 ${noun}s by momentum · ${activePreset.label} weighting`
             : activeTab === 'reversals'
@@ -952,7 +952,7 @@ const ThemeFinder = ({ mode = 'themes' }) => {
             : `Top 20 performing ${noun}s · avg of constituents`}
         </h2>
         <div className="flex items-center gap-2">
-          {(activeTab === 'golden' || activeTab === 'momentum') && (
+          {(/* activeTab === 'golden' || */ activeTab === 'momentum') && (
             <div className="flex items-center gap-1 mr-2">
               <PresetPills active={momentumPreset} onChange={setMomentumPreset} />
             </div>
@@ -960,37 +960,13 @@ const ThemeFinder = ({ mode = 'themes' }) => {
           {activeTab === 'momentum' && (
             <span className="text-[10px] text-gray-500 mr-2">{activePreset.description}</span>
           )}
+          {/* Golden timeframe trimmer — commented out with Golden tab
           {activeTab === 'golden' && (
             <div className="flex items-center gap-1 text-xs text-gray-400">
-              <span className="mr-1">Timeframes:</span>
-              <button
-                onClick={() => setTrimStart((s) => Math.max(0, s - 1))}
-                disabled={trimStart === 0}
-                title="Add back shortest timeframe"
-                className="px-1.5 py-0.5 rounded bg-secondary hover:bg-accent transition-colors disabled:opacity-30"
-              >+ {TIMEFRAMES[safeStart - 1]?.label ?? TIMEFRAMES[0].label}</button>
-              <span className="px-1.5 py-0.5 font-mono text-white">{GOLDEN_TIMEFRAMES[0]?.label} → {GOLDEN_TIMEFRAMES[GOLDEN_TIMEFRAMES.length - 1]?.label}</span>
-              <button
-                onClick={() => setTrimEnd((e) => Math.max(0, e - 1))}
-                disabled={trimEnd === 0}
-                title="Add back longest timeframe"
-                className="px-1.5 py-0.5 rounded bg-secondary hover:bg-accent transition-colors disabled:opacity-30"
-              >+ {TIMEFRAMES[TIMEFRAMES.length - safeEnd]?.label ?? TIMEFRAMES[TIMEFRAMES.length - 1].label}</button>
-              <span className="text-gray-600 mx-1">|</span>
-              <button
-                onClick={() => setTrimStart((s) => Math.min(s + 1, maxTrim - trimEnd))}
-                disabled={GOLDEN_TIMEFRAMES.length <= 1}
-                title="Remove shortest timeframe"
-                className="px-1.5 py-0.5 rounded bg-secondary hover:bg-accent transition-colors disabled:opacity-30"
-              >− {GOLDEN_TIMEFRAMES[0]?.label}</button>
-              <button
-                onClick={() => setTrimEnd((e) => Math.min(e + 1, maxTrim - trimStart))}
-                disabled={GOLDEN_TIMEFRAMES.length <= 1}
-                title="Remove longest timeframe"
-                className="px-1.5 py-0.5 rounded bg-secondary hover:bg-accent transition-colors disabled:opacity-30"
-              >− {GOLDEN_TIMEFRAMES[GOLDEN_TIMEFRAMES.length - 1]?.label}</button>
+              ...
             </div>
           )}
+          */}
           <span className="text-xs text-gray-500">Data is delayed 15 mins</span>
           <button
             onClick={() => fetchData()}
@@ -1140,67 +1116,13 @@ const ThemeFinder = ({ mode = 'themes' }) => {
               </table>
             )}
 
-            {/* Golden tab */}
+            {/* Golden tab — commented out
             {activeTab === 'golden' && (
               <table className="w-full text-sm">
-                <thead>
-                  <tr className="text-gray-400 border-b border-accent sticky top-0 bg-primary z-10">
-                    <th className="text-left py-2 pr-3 w-8">#</th>
-                    <th className="text-left py-2 pr-4">{Noun}</th>
-                    <th className="text-left py-2 pr-4 hidden md:table-cell">Description</th>
-
-                    <th className="text-left py-2 pr-4 hidden lg:table-cell">Trend</th>
-                    {GOLDEN_TIMEFRAMES.map((tf) => (
-                      <th key={tf.key} className="text-right py-2 px-3">{tf.label}</th>
-                    ))}
-                    <th
-                      className={`text-right py-2 px-3 cursor-pointer transition-colors ${goldenSortBy === 'avgRank' ? 'text-yellow-400' : 'text-gray-500 hover:text-yellow-400'}`}
-                      onClick={() => setGoldenSortBy('avgRank')}
-                      title="Sort by average rank"
-                    >Avg Rank{goldenSortBy === 'avgRank' ? ' ▼' : ''}</th>
-                    <th
-                      className={`text-right py-2 px-3 cursor-pointer transition-colors ${goldenSortBy === 'mtmRank' ? 'text-purple-400' : 'text-gray-500 hover:text-purple-400'}`}
-                      onClick={() => setGoldenSortBy('mtmRank')}
-                      title={`Momentum score (${activePreset.label} preset)`}
-                    >Mtm{goldenSortBy === 'mtmRank' ? ' ▼' : ''}</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {goldenRows.map((theme, i) => (
-                    <Fragment key={theme.id}>
-                      <tr className={`border-b border-accent/20 hover:bg-secondary/50 transition-colors ${
-                        expandedThemeId === theme.id ? 'bg-secondary/40' : ''
-                      }`}>
-                        <LeadingCells
-                          rank={i + 1}
-                          theme={theme}
-                          expanded={expandedThemeId === theme.id}
-                          onExpand={() => toggleExpand(theme.id)}
-                        />
-                        <td className="py-3 pr-4 hidden lg:table-cell">
-                          <SparkRank rankPoints={REVERSAL_TFS.map(key => rankByTf[key][theme.id])} />
-                        </td>
-                        {GOLDEN_TIMEFRAMES.map((tf) => {
-                          const r = rankByTf[tf.key][theme.id];
-                          return (
-                            <td key={tf.key} className="py-3 px-3 text-right font-mono text-xs text-gray-300">
-                              {r ? ordinal(r.rank) : '-'}
-                            </td>
-                          );
-                        })}
-                        <td className="py-3 px-3 text-right font-mono text-xs text-yellow-400 font-semibold">
-                          {ordinal(Math.round(theme.avgRank))}
-                        </td>
-                        <td className="py-3 px-3 text-right font-mono text-xs text-purple-400 font-semibold">
-                          {theme.mtmRankScore != null ? ordinal(Math.round(theme.mtmRankScore)) : '-'}
-                        </td>
-                      </tr>
-                      <ExpandRow theme={theme} />
-                    </Fragment>
-                  ))}
-                </tbody>
+                ...
               </table>
             )}
+            */}
 
             {/* Momentum tab */}
             {activeTab === 'momentum' && (

@@ -155,20 +155,20 @@ function StockDetail({ ticker, onBack }) {
             <div className="p-8 text-center text-gray-500">No performance data available</div>
           ) : (
             <div className="p-4">
-              {/* Timeframe performance */}
-              <div className="grid grid-cols-3 md:grid-cols-6 gap-3 mb-6">
-                {TIMEFRAMES.map((tf) => (
-                  <div key={tf.key} className="bg-secondary/50 rounded-lg p-3 text-center">
-                    <div className="text-xs text-gray-500 mb-1">{tf.label}</div>
-                    <div className={`text-lg font-mono font-semibold ${perfCls(perf[tf.key])}`}>
-                      {fmt(perf[tf.key])}
-                    </div>
+              {/* Price, Market Cap, Volume & RVOL */}
+              <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-6">
+                <div className="bg-secondary/50 rounded-lg p-3 text-center">
+                  <div className="text-xs text-gray-500 mb-1">Price</div>
+                  <div className="text-lg font-mono font-semibold text-gray-300">
+                    {perf.price != null ? `$${perf.price.toFixed(2)}` : '-'}
                   </div>
-                ))}
-              </div>
-
-              {/* Volume & RVOL */}
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
+                </div>
+                <div className="bg-secondary/50 rounded-lg p-3 text-center">
+                  <div className="text-xs text-gray-500 mb-1">Market Cap</div>
+                  <div className="text-lg font-mono font-semibold text-gray-300">
+                    {perf.marketCap != null ? fmtVol(perf.marketCap) : '-'}
+                  </div>
+                </div>
                 <div className="bg-secondary/50 rounded-lg p-3 text-center">
                   <div className="text-xs text-gray-500 mb-1">Volume</div>
                   <div className="text-lg font-mono font-semibold text-gray-300">
@@ -192,11 +192,20 @@ function StockDetail({ ticker, onBack }) {
                     {perf.relVolume != null ? `${perf.relVolume.toFixed(2)}x` : '-'}
                   </div>
                 </div>
-                <div className="bg-secondary/50 rounded-lg p-3 text-center">
-                  <div className="text-xs text-gray-500 mb-1">Price</div>
-                  <div className="text-lg font-mono font-semibold text-gray-300">
-                    {perf.price != null ? `$${perf.price.toFixed(2)}` : '-'}
-                  </div>
+              </div>
+
+              {/* Timeframe performance */}
+              <div className="bg-secondary/30 rounded-lg p-4 mb-6">
+                <h3 className="text-sm font-semibold text-gray-400 mb-3">Stock Performance</h3>
+                <div className="grid grid-cols-3 md:grid-cols-6 gap-3">
+                  {TIMEFRAMES.map((tf) => (
+                    <div key={tf.key} className="text-center">
+                      <div className="text-xs text-gray-500 mb-1">{tf.label}</div>
+                      <div className={`text-lg font-mono font-semibold ${perfCls(perf[tf.key])}`}>
+                        {fmt(perf[tf.key])}
+                      </div>
+                    </div>
+                  ))}
                 </div>
               </div>
 
