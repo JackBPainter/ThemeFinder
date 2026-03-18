@@ -221,7 +221,7 @@ function StockDetail({ ticker, onBack }) {
                       return (
                         <div key={tf.key} className="text-center">
                           <div className="text-xs text-gray-500 mb-1">{tf.label}</div>
-                          <div className={`text-sm font-mono font-semibold ${perfCls(rs)}`}>
+                          <div className={`text-lg font-mono font-semibold ${perfCls(rs)}`}>
                             {rs != null ? fmt(rs) : '-'}
                           </div>
                         </div>
