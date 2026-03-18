@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import ThemeFinder from './components/ThemeFinder';
 import StockDetail from './components/StockDetail';
 import Home from './components/Home';
+import MarketRegimeBar from './components/MarketRegimeBar';
 import { TrendingUp, Home as HomeIcon } from 'lucide-react';
 
 function App() {
@@ -46,12 +47,22 @@ function App() {
 
   // Stock detail page
   if (stockTicker) {
-    return <StockDetail ticker={stockTicker} onBack={handleBack} />;
+    return (
+      <>
+        <MarketRegimeBar />
+        <StockDetail ticker={stockTicker} onBack={handleBack} />
+      </>
+    );
   }
 
   // Home page
   if (view === 'home') {
-    return <Home onNavigate={navigate} />;
+    return (
+      <>
+        <MarketRegimeBar />
+        <Home onNavigate={navigate} />
+      </>
+    );
   }
 
   // Theme / Sector finder
@@ -59,47 +70,21 @@ function App() {
 
   return (
     <div className="min-h-screen bg-[#0a0e27] text-white">
-      {/* Header */}
-      <header className="bg-primary border-b border-accent p-4 flex items-center justify-between">
-        <div className="flex items-center gap-4">
-          <button
-            onClick={goHome}
-            className="flex items-center gap-1.5 text-gray-400 hover:text-white transition-colors"
-            title="Back to Home"
-          >
-            <HomeIcon size={18} />
-          </button>
-          <h1 className="text-2xl font-bold flex items-center gap-2">
-            <TrendingUp className="text-success" />
-            {mode === 'sectors' ? 'Sector Finder' : 'Theme Finder'}
-          </h1>
-        </div>
+      <MarketRegimeBar />
 
-        {/* Themes / Sectors pill toggle */}
+      {/* Header */}
+      <header className="bg-primary border-b border-accent p-4 flex items-center gap-4">
         <button
-          onClick={() => navigate(mode === 'themes' ? 'sectors' : 'themes')}
-          className="relative flex items-center rounded-full p-1 bg-secondary border border-accent transition-colors"
-          title="Switch between Themes and Sectors"
+          onClick={goHome}
+          className="flex items-center gap-1.5 text-gray-400 hover:text-white transition-colors"
+          title="Back to Home"
         >
-          <span
-            className={`px-3 py-1 rounded-full text-xs font-semibold transition-all ${
-              mode === 'themes'
-                ? 'bg-purple-600 text-white shadow'
-                : 'text-gray-400 hover:text-gray-200'
-            }`}
-          >
-            Themes
-          </span>
-          <span
-            className={`px-3 py-1 rounded-full text-xs font-semibold transition-all ${
-              mode === 'sectors'
-                ? 'bg-blue-600 text-white shadow'
-                : 'text-gray-400 hover:text-gray-200'
-            }`}
-          >
-            Sectors
-          </span>
+          <HomeIcon size={18} />
         </button>
+        <h1 className="text-2xl font-bold flex items-center gap-2">
+          <TrendingUp className="text-success" />
+          {mode === 'sectors' ? 'Sector Finder' : 'Theme Finder'}
+        </h1>
       </header>
 
       {/* Main Content */}
