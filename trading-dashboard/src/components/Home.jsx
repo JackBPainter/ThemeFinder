@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { TrendingUp, BarChart3, Layers, Search, ArrowRight, Activity, GitCompareArrows, Zap, Flame, Calculator } from 'lucide-react';
+import DailyWatchlist from './DailyWatchlist';
 
 function Home({ onNavigate }) {
   const [search, setSearch] = useState('');
@@ -119,6 +120,11 @@ function Home({ onNavigate }) {
             </button>
           </form>
         </div>
+      </div>
+
+      {/* Daily Watchlist */}
+      <div className="max-w-5xl mx-auto px-6 pb-6">
+        <DailyWatchlist />
       </div>
 
       {/* Tool Cards */}
