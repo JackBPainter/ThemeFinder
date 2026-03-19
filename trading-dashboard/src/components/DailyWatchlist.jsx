@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
-import { ChevronDown, ChevronUp, Crosshair, Pencil, RotateCcw } from 'lucide-react';
+import { ChevronDown, ChevronUp, Crosshair, Pencil, RotateCcw, RefreshCw } from 'lucide-react';
 import { runWatchlistPipeline } from '../services/watchlistScoringService';
 
 const ACCOUNT_KEY = 'tf_watchlist_account';
@@ -24,6 +24,22 @@ const tierCls = (tier) => {
   return 'bg-gray-500/20 text-gray-400';
 };
 
+function getUSMarketPhase() {
+  const fmt = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York',
+    hour: 'numeric', minute: 'numeric', weekday: 'short',
+    hour12: false,
+  });
+  const parts = Object.fromEntries(
+    fmt.formatToParts(new Date()).map((p) => [p.type, p.value])
+  );
+  const day = parts.weekday;
+  const mins = parseInt(parts.hour, 10) * 60 + parseInt(parts.minute, 10);
+  if (day === 'Sat' || day === 'Sun') return 'closed';
+  if (mins >= 570 && mins < 960) return 'open'; // 9:30 AM – 4:00 PM ET
+  return 'closed';
+}
+
 function DailyWatchlist() {
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -44,6 +60,7 @@ function DailyWatchlist() {
   const [editDraft, setEditDraft] = useState('');
 
   const account = parseFloat(accountStr) || 50000;
+  const marketOpen = getUSMarketPhase() === 'open';
 
   // Persist collapse state
   useEffect(() => {
@@ -51,7 +68,7 @@ function DailyWatchlist() {
   }, [collapsed]);
 
   // Fetch data
-  useEffect(() => {
+  const refresh = useCallback(() => {
     let cancelled = false;
     setLoading(true);
     setError(null);
@@ -75,6 +92,12 @@ function DailyWatchlist() {
 
     return () => { cancelled = true; };
   }, []);
+
+  // Initial load
+  useEffect(() => {
+    const cancel = refresh();
+    return cancel;
+  }, [refresh]);
 
   // Account editing
   const startEditAccount = useCallback(() => {
@@ -275,6 +298,16 @@ function DailyWatchlist() {
               )}
             </div>
           )}
+          {!collapsed && (
+            <button
+              onClick={(e) => { e.stopPropagation(); if (!loading) refresh(); }}
+              disabled={loading}
+              className="text-gray-500 hover:text-amber-400 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+              title="Refresh watchlist"
+            >
+              <RefreshCw size={13} className={loading ? 'animate-spin' : ''} />
+            </button>
+          )}
           {collapsed ? <ChevronDown size={16} className="text-gray-500" /> : <ChevronUp size={16} className="text-gray-500" />}
         </div>
       </div>
@@ -318,12 +351,14 @@ function DailyWatchlist() {
                     <SortHeader col="rs" className="text-right">RS</SortHeader>
                     <SortHeader col="rvol" className="text-right">RVOL</SortHeader>
                     <SortHeader col="1w" className="text-right">1W %</SortHeader>
-                    <th className="py-2 px-2 text-right text-gray-500">Entry</th>
-                    <th className="py-2 px-2 text-right text-gray-500">Stop</th>
-                    <th className="py-2 px-2 text-right text-gray-500">T1</th>
-                    <th className="py-2 px-2 text-right text-gray-500 hidden md:table-cell">T2</th>
-                    <th className="py-2 px-2 text-right text-gray-500 hidden md:table-cell">Shares</th>
-                    <th className="py-2 px-2 text-right text-gray-500 hidden md:table-cell">$ Risk</th>
+                    {marketOpen && <>
+                      <th className="py-2 px-2 text-right text-gray-500">Entry</th>
+                      <th className="py-2 px-2 text-right text-gray-500">Stop</th>
+                      <th className="py-2 px-2 text-right text-gray-500">T1</th>
+                      <th className="py-2 px-2 text-right text-gray-500 hidden md:table-cell">T2</th>
+                      <th className="py-2 px-2 text-right text-gray-500 hidden md:table-cell">Shares</th>
+                      <th className="py-2 px-2 text-right text-gray-500 hidden md:table-cell">$ Risk</th>
+                    </>}
                   </tr>
                 </thead>
                 <tbody>
@@ -344,7 +379,10 @@ function DailyWatchlist() {
                         </td>
                         <td className="py-1.5 px-2">
                           <span className="text-gray-400 text-[11px]">{item.themeName}</span>
-                          <span className={`ml-1.5 text-[9px] font-bold px-1.5 py-0.5 rounded-full ${tierCls(item.themeTier)}`}>
+                          <span
+                            className={`ml-1.5 text-[9px] font-bold px-1.5 py-0.5 rounded-full cursor-help ${tierCls(item.themeTier)}`}
+                            title={"Tier " + item.themeTier + " — based on theme momentum rank + acceleration.\n\nA (Primary): Rank 1–3 with strong acceleration (≥0.02). Risk: 1.5% per trade.\nB (Secondary): Rank 4–7 with positive acceleration. Risk: 1.0% per trade.\nC (Speculative): Rank 8–10 with any positive acceleration. Risk: 0.5% per trade."}
+                          >
                             {item.themeTier}
                           </span>
                         </td>
@@ -364,22 +402,24 @@ function DailyWatchlist() {
                         <td className={`py-1.5 px-2 text-right font-mono ${perfCls(item.perf1W)}`}>
                           {fmt(item.perf1W)}
                         </td>
-                        <EditableCell item={item} field="entry" />
-                        <EditableCell item={item} field="stopLoss" />
-                        <EditableCell item={item} field="target1" />
-                        <td className="py-1.5 px-2 text-right font-mono text-gray-300 hidden md:table-cell cursor-pointer hover:text-white transition-colors"
-                          onClick={() => startEdit(item.ticker, 'target2', getVal(item, 'target2'))}
-                        >
-                          <span className={overrides[item.ticker]?.target2 != null ? 'text-blue-300' : ''}>
-                            ${getVal(item, 'target2').toFixed(2)}
-                          </span>
-                        </td>
-                        <td className="py-1.5 px-2 text-right font-mono text-gray-400 hidden md:table-cell">
-                          {pos.shares.toLocaleString()}
-                        </td>
-                        <td className="py-1.5 px-2 text-right font-mono text-red-400 hidden md:table-cell">
-                          ${pos.dollarRisk.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
-                        </td>
+                        {marketOpen && <>
+                          <EditableCell item={item} field="entry" />
+                          <EditableCell item={item} field="stopLoss" />
+                          <EditableCell item={item} field="target1" />
+                          <td className="py-1.5 px-2 text-right font-mono text-gray-300 hidden md:table-cell cursor-pointer hover:text-white transition-colors"
+                            onClick={() => startEdit(item.ticker, 'target2', getVal(item, 'target2'))}
+                          >
+                            <span className={overrides[item.ticker]?.target2 != null ? 'text-blue-300' : ''}>
+                              ${getVal(item, 'target2').toFixed(2)}
+                            </span>
+                          </td>
+                          <td className="py-1.5 px-2 text-right font-mono text-gray-400 hidden md:table-cell">
+                            {pos.shares.toLocaleString()}
+                          </td>
+                          <td className="py-1.5 px-2 text-right font-mono text-red-400 hidden md:table-cell">
+                            ${pos.dollarRisk.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
+                          </td>
+                        </>}
                       </tr>
                     );
                   })}
