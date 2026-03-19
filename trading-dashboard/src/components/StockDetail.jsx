@@ -57,6 +57,17 @@ function StockDetail({ ticker, onBack }) {
     return () => { cancelled = true; };
   }, [ticker]);
 
+  // Update tab title
+  useEffect(() => {
+    const prev = document.title;
+    if (perf?.price != null) {
+      document.title = `${ticker} — $${perf.price.toFixed(2)}`;
+    } else {
+      document.title = ticker;
+    }
+    return () => { document.title = prev; };
+  }, [ticker, perf]);
+
   // Init TradingView chart
   useEffect(() => {
     if (tvInit.current || !containerRef.current || !window.TradingView) return;

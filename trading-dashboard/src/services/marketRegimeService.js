@@ -6,34 +6,40 @@ const FINVIZ_BASE = '/api/finviz';
  * Returns { spy: { price, change, changePct }, vix: { price, change, changePct } }
  */
 export async function fetchMarketData() {
-  const [spy, vix] = await Promise.all([fetchSPY(), fetchVIX()]);
-  return { spy, vix };
+  const [indices, vix] = await Promise.all([fetchIndices(), fetchVIX()]);
+  return { spy: indices.spy, nasdaq: indices.nasdaq, vix };
 }
 
-async function fetchSPY() {
+function parseIndex(data, symbol) {
+  const entry = data[symbol];
+  if (!entry) return null;
+
+  const price = entry.lastClose ?? entry.close ?? null;
+  const prev = entry.prevClose ?? null;
+  if (price == null || prev == null || prev === 0) return null;
+
+  const change = price - prev;
+  const changePct = (change / prev) * 100;
+
+  return { price, change, changePct };
+}
+
+async function fetchIndices() {
   try {
     const res = await fetch(`${FINVIZ_BASE}/`);
-    if (!res.ok) return null;
+    if (!res.ok) return { spy: null, nasdaq: null };
     const html = await res.text();
 
-    // Parse the js-indices JSON embedded in the homepage
     const match = html.match(/<script id="js-indices" type="application\/json">(.*?)<\/script>/s);
-    if (!match) return null;
+    if (!match) return { spy: null, nasdaq: null };
 
     const data = JSON.parse(match[1]);
-    const sp = data['^GSPC'];
-    if (!sp) return null;
-
-    const price = sp.lastClose ?? sp.close ?? null;
-    const prev = sp.prevClose ?? null;
-    if (price == null || prev == null || prev === 0) return null;
-
-    const change = price - prev;
-    const changePct = (change / prev) * 100;
-
-    return { price, change, changePct };
+    return {
+      spy: parseIndex(data, '^GSPC'),
+      nasdaq: parseIndex(data, '^IXIC'),
+    };
   } catch {
-    return null;
+    return { spy: null, nasdaq: null };
   }
 }
 

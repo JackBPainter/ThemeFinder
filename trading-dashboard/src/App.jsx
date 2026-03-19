@@ -2,11 +2,13 @@ import { useState, useEffect, useCallback } from 'react';
 import ThemeFinder from './components/ThemeFinder';
 import StockDetail from './components/StockDetail';
 import Home from './components/Home';
+import AccelerationHeatmap from './components/AccelerationHeatmap';
+import PositionSizer from './components/PositionSizer';
 import MarketRegimeBar from './components/MarketRegimeBar';
 import { TrendingUp, Home as HomeIcon } from 'lucide-react';
 
 function App() {
-  const [view, setView] = useState('home'); // 'home' | 'themes' | 'sectors'
+  const [view, setView] = useState('home'); // 'home' | 'themes' | 'sectors' | 'heatmap'
   const [stockTicker, setStockTicker] = useState(null);
 
   // Check URL for ?stock=TICKER or ?view= on mount and on popstate
@@ -19,7 +21,7 @@ function App() {
         setStockTicker(stock);
       } else {
         setStockTicker(null);
-        if (v === 'themes' || v === 'sectors') setView(v);
+        if (v === 'themes' || v === 'sectors' || v === 'heatmap' || v === 'sectorHeatmap' || v === 'positionSizer') setView(v);
         else setView('home');
       }
     };
@@ -61,6 +63,26 @@ function App() {
       <>
         <MarketRegimeBar />
         <Home onNavigate={navigate} />
+      </>
+    );
+  }
+
+  // Acceleration Heatmaps
+  if (view === 'heatmap' || view === 'sectorHeatmap') {
+    return (
+      <>
+        <MarketRegimeBar />
+        <AccelerationHeatmap mapType={view === 'sectorHeatmap' ? 'sectors' : 'themes'} onBack={goHome} />
+      </>
+    );
+  }
+
+  // Position Sizer
+  if (view === 'positionSizer') {
+    return (
+      <>
+        <MarketRegimeBar />
+        <PositionSizer onBack={goHome} />
       </>
     );
   }

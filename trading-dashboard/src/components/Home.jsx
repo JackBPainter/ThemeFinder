@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { TrendingUp, BarChart3, Layers, Search, ArrowRight, Activity, GitCompareArrows, Zap } from 'lucide-react';
+import { TrendingUp, BarChart3, Layers, Search, ArrowRight, Activity, GitCompareArrows, Zap, Flame, Calculator } from 'lucide-react';
 
 function Home({ onNavigate }) {
   const [search, setSearch] = useState('');
@@ -36,6 +36,42 @@ function Home({ onNavigate }) {
       hover: 'hover:border-blue-500/60',
       iconBg: 'bg-blue-600/20',
       iconColor: 'text-blue-400',
+    },
+    {
+      key: 'heatmap',
+      title: 'Theme Acceleration Heatmap',
+      description: 'Visualise every theme as a tile colour-coded by momentum acceleration, with rank overlaid. Spot accelerating and decelerating themes at a glance.',
+      icon: Flame,
+      color: 'orange',
+      gradient: 'from-orange-600/20 to-orange-900/10',
+      border: 'border-orange-500/30',
+      hover: 'hover:border-orange-500/60',
+      iconBg: 'bg-orange-600/20',
+      iconColor: 'text-orange-400',
+    },
+    {
+      key: 'sectorHeatmap',
+      title: 'Sector Acceleration Heatmap',
+      description: 'Visualise every sector as a tile colour-coded by momentum acceleration, with rank overlaid. Spot rotating and fading sectors at a glance.',
+      icon: Flame,
+      color: 'amber',
+      gradient: 'from-amber-600/20 to-amber-900/10',
+      border: 'border-amber-500/30',
+      hover: 'hover:border-amber-500/60',
+      iconBg: 'bg-amber-600/20',
+      iconColor: 'text-amber-400',
+    },
+    {
+      key: 'positionSizer',
+      title: 'Position Sizer',
+      description: 'Calculate share count, dollar risk, and portfolio exposure from entry price, stop level, and current market regime.',
+      icon: Calculator,
+      color: 'emerald',
+      gradient: 'from-emerald-600/20 to-emerald-900/10',
+      border: 'border-emerald-500/30',
+      hover: 'hover:border-emerald-500/60',
+      iconBg: 'bg-emerald-600/20',
+      iconColor: 'text-emerald-400',
     },
   ];
 

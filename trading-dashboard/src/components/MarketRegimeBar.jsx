@@ -46,12 +46,14 @@ function MarketRegimeBar() {
     );
   }
 
-  const { spy, vix } = data;
+  const { spy, nasdaq, vix } = data;
   const regime = classifyRegime(spy, vix);
   const style = regime ? REGIME_STYLES[regime.color] : null;
 
   const SpyIcon = spy?.changePct > 0.1 ? TrendingUp : spy?.changePct < -0.1 ? TrendingDown : Minus;
   const spyColor = spy?.changePct > 0 ? 'text-success' : spy?.changePct < 0 ? 'text-danger' : 'text-gray-400';
+  const NasdaqIcon = nasdaq?.changePct > 0.1 ? TrendingUp : nasdaq?.changePct < -0.1 ? TrendingDown : Minus;
+  const nasdaqColor = nasdaq?.changePct > 0 ? 'text-success' : nasdaq?.changePct < 0 ? 'text-danger' : 'text-gray-400';
   const vixColor = vix?.price >= 30 ? 'text-red-400' : vix?.price >= 20 ? 'text-yellow-400' : 'text-green-400';
 
   return (
@@ -80,8 +82,29 @@ function MarketRegimeBar() {
           {/* Divider */}
           <span className="text-gray-700">|</span>
 
-          {/* VIX */}
+          {/* Nasdaq */}
           <div className="flex items-center gap-2">
+            <span className="text-gray-500 font-medium">Nasdaq</span>
+            {nasdaq ? (
+              <>
+                <NasdaqIcon size={13} className={nasdaqColor} />
+                <span className={`font-mono font-semibold ${nasdaqColor}`}>
+                  {fmt(nasdaq.price, 2)}
+                </span>
+                <span className={`font-mono ${nasdaqColor}`}>
+                  {sign(nasdaq.changePct)}{fmt(nasdaq.changePct)}%
+                </span>
+              </>
+            ) : (
+              <span className="text-gray-600">—</span>
+            )}
+          </div>
+
+          {/* Divider */}
+          <span className="text-gray-700">|</span>
+
+          {/* VIX */}
+          <div className="flex items-center gap-2" title="CBOE Volatility Index — measures expected 30-day S&P 500 volatility. Below 20: low fear (green). 20–30: elevated uncertainty (yellow). Above 30: high fear / stress (red).">
             <span className="text-gray-500 font-medium">VIX</span>
             {vix ? (
               <>
@@ -103,7 +126,10 @@ function MarketRegimeBar() {
 
         {/* Center: Regime badge */}
         {regime && (
-          <div className={`px-3 py-0.5 rounded-full text-xs font-bold ${style.badge}`}>
+          <div
+            className={`px-3 py-0.5 rounded-full text-xs font-bold cursor-default ${style.badge}`}
+            title={`Regime: ${regime.regime}\n\nBull: VIX < 20 AND S&P 500 change >= 0%\nBear: VIX > 30 OR S&P 500 change < -1%\nChoppy: everything else\n\nCurrent: VIX ${fmt(vix?.price)} | S&P ${sign(spy?.changePct)}${fmt(spy?.changePct)}%`}
+          >
             {regime.regime === 'Bull' && <TrendingUp size={11} className="inline mr-1 -mt-0.5" />}
             {regime.regime === 'Bear' && <TrendingDown size={11} className="inline mr-1 -mt-0.5" />}
             {regime.regime === 'Choppy' && <Minus size={11} className="inline mr-1 -mt-0.5" />}
@@ -111,7 +137,7 @@ function MarketRegimeBar() {
           </div>
         )}
 
-        {/* Right: Risk guidance — commented out
+        {/* Right: Risk guidance */}
         {regime && (
           <div className="flex items-center gap-4 text-xs">
             <div className="flex items-center gap-1.5 text-gray-400" title="Suggested maximum risk per trade based on current regime">
@@ -126,7 +152,6 @@ function MarketRegimeBar() {
             </div>
           </div>
         )}
-        */}
       </div>
     </div>
   );
