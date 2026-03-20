@@ -10,6 +10,7 @@ import { TrendingUp, Home as HomeIcon } from 'lucide-react';
 function App() {
   const [view, setView] = useState('home'); // 'home' | 'themes' | 'sectors' | 'heatmap'
   const [stockTicker, setStockTicker] = useState(null);
+  const [expandThemeId, setExpandThemeId] = useState(null);
 
   // Check URL for ?stock=TICKER or ?view= on mount and on popstate
   useEffect(() => {
@@ -23,6 +24,7 @@ function App() {
         setStockTicker(null);
         if (v === 'themes' || v === 'sectors' || v === 'heatmap' || v === 'sectorHeatmap' || v === 'positionSizer') setView(v);
         else setView('home');
+        setExpandThemeId(params.get('theme') || null);
       }
     };
     readParams();
@@ -112,7 +114,7 @@ function App() {
       {/* Main Content */}
       <main className="p-4">
         <div className="h-[calc(100vh-80px)] min-h-[600px]">
-          <ThemeFinder mode={mode} />
+          <ThemeFinder mode={mode} initialExpandThemeId={expandThemeId} />
         </div>
       </main>
     </div>

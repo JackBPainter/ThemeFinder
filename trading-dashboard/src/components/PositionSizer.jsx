@@ -19,6 +19,10 @@ const STORAGE_KEY = 'td_account_value';
 const CURRENCY_KEY = 'td_currency';
 
 function PositionSizer({ onBack }) {
+  const [prefillTicker] = useState(() => {
+    const params = new URLSearchParams(window.location.search);
+    return params.get('ticker') || '';
+  });
   const [accountValue, setAccountValue] = useState('');
   const [saved, setSaved] = useState(false);
   const [riskPct, setRiskPct] = useState('');
@@ -33,7 +37,7 @@ function PositionSizer({ onBack }) {
   const isUsd = CURRENCIES[currIdx].key === 'USD';
   const cs = CURRENCIES[currIdx].symbol;
 
-  // Load account value + currency from localStorage
+  // Load account value + currency from localStorage, and URL params for pre-fill
   useEffect(() => {
     const stored = localStorage.getItem(STORAGE_KEY);
     if (stored) { setAccountValue(stored); setSaved(true); }
@@ -42,6 +46,10 @@ function PositionSizer({ onBack }) {
       const idx = CURRENCIES.findIndex((c) => c.key === storedCurr);
       if (idx >= 0) setCurrIdx(idx);
     }
+    // Pre-fill entry price from URL
+    const params = new URLSearchParams(window.location.search);
+    const urlEntry = params.get('entry');
+    if (urlEntry && !isNaN(parseFloat(urlEntry))) setEntryPrice(urlEntry);
   }, []);
 
   // Fetch regime risk default
@@ -126,6 +134,9 @@ function PositionSizer({ onBack }) {
         <h1 className="text-2xl font-bold flex items-center gap-2">
           <Calculator className="text-emerald-400" />
           Position Sizer
+          {prefillTicker && (
+            <span className="text-lg font-mono text-gray-400">— {prefillTicker}</span>
+          )}
         </h1>
       </header>
 

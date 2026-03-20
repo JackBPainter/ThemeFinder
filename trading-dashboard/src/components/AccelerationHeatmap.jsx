@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { Home as HomeIcon, RefreshCw } from 'lucide-react';
+import { Home as HomeIcon, RefreshCw, TrendingUp, TrendingDown, Minus } from 'lucide-react';
 import { getStockPerformance } from '../services/yahooFinanceApi';
 import { fetchFinvizSnapshot } from '../services/earningsService';
 
@@ -158,6 +158,30 @@ function accelBorder(value) {
 }
 
 /* ── Stock Drill-Down (same table as ThemeFinder) ── */
+function AccelIndicator({ value }) {
+  if (value == null) return <span className="text-gray-600">—</span>;
+  let Icon, cls, label;
+  if (value > 0.05) {
+    Icon = TrendingUp; cls = 'text-green-400 font-semibold'; label = 'Momentum accelerating strongly';
+  } else if (value > 0.01) {
+    Icon = TrendingUp; cls = 'text-green-500'; label = 'Momentum accelerating';
+  } else if (value < -0.05) {
+    Icon = TrendingDown; cls = 'text-red-400 font-semibold'; label = 'Momentum decelerating sharply';
+  } else if (value < -0.01) {
+    Icon = TrendingDown; cls = 'text-orange-400'; label = 'Momentum decelerating';
+  } else {
+    Icon = Minus; cls = 'text-gray-500'; label = 'Momentum steady';
+  }
+  return (
+    <span className={`inline-flex items-center gap-0.5 ${cls}`} title={label}>
+      <Icon size={13} />
+      <span className="text-[10px] font-mono hidden xl:inline">
+        {value > 0 ? '+' : ''}{value.toFixed(2)}
+      </span>
+    </span>
+  );
+}
+
 function HeatmapDrillDown({ theme, tickerPerf, sortBy = 'w1' }) {
   const [extraPerf, setExtraPerf] = useState({});
   const [volData, setVolData] = useState({});
@@ -236,13 +260,42 @@ function HeatmapDrillDown({ theme, tickerPerf, sortBy = 'w1' }) {
     w13: { ...(tickerPerf.w13 ?? {}), ...Object.fromEntries(Object.entries(extraPerf).map(([t, p]) => [t, tickerPerf.w13?.[t] ?? p?.w13 ?? 0])) },
   };
 
+  // Build per-ticker perf map for ranking
+  const allTickerPerfs = theme.tickers.map((ticker) => ({
+    ticker,
+    perfs: getPerfForTicker(ticker),
+  }));
+
+  // Rank tickers within this theme per timeframe (rank 1 = best perf)
+  const rankByTf = {};
+  for (const tf of TIMEFRAMES) {
+    const sorted = [...allTickerPerfs]
+      .filter((t) => t.perfs[tf.key] != null)
+      .sort((a, b) => b.perfs[tf.key] - a.perfs[tf.key]);
+    rankByTf[tf.key] = {};
+    sorted.forEach((t, i) => { rankByTf[tf.key][t.ticker] = i + 1; });
+  }
+  const totalTickers = theme.tickers.length;
+  const tfsLongFirst = [...TIMEFRAMES].reverse();
+
   const tickerData = theme.tickers
     .map((ticker) => {
       const perfs = getPerfForTicker(ticker);
       const spyPerf = tickerPerf[sortBy]?.['SPY'] ?? 0;
       const rsVsSpy = perfs[sortBy] != null ? perfs[sortBy] - spyPerf : null;
       const compositeRS = computeCompositeRS(ticker, mergedForRS);
-      return { ticker, perfs, rsVsSpy, compositeRS };
+
+      // Stock acceleration
+      let accel = null;
+      const accelRanks = tfsLongFirst
+        .map((tf) => rankByTf[tf.key]?.[ticker])
+        .filter((v) => v != null);
+      if (accelRanks.length >= 2 && totalTickers > 1) {
+        const slope = (accelRanks[0] - accelRanks[accelRanks.length - 1]) / (accelRanks.length - 1);
+        accel = Math.round((slope / totalTickers) * 100) / 100;
+      }
+
+      return { ticker, perfs, rsVsSpy, compositeRS, accel };
     })
     .sort((a, b) => b.compositeRS - a.compositeRS);
 
@@ -280,6 +333,10 @@ function HeatmapDrillDown({ theme, tickerPerf, sortBy = 'w1' }) {
               className="text-right py-1.5 px-2 text-purple-400 whitespace-nowrap cursor-help"
               title="Composite Relative Strength — weighted score: (1W × 3 + 1M × 2 + 3M × 1) minus the same for SPY. Higher = stronger momentum vs market."
             >Comp RS</th>
+            <th
+              className="text-center py-1.5 px-2 whitespace-nowrap cursor-help"
+              title="Stock momentum acceleration — whether this stock's rank within the theme is improving or worsening from longer to shorter timeframes."
+            >Accel</th>
           </tr>
         </thead>
         <tbody>
@@ -318,9 +375,9 @@ function HeatmapDrillDown({ theme, tickerPerf, sortBy = 'w1' }) {
                             ? 'bg-yellow-900/30 text-yellow-400'
                             : 'bg-gray-800/40 text-gray-400'
                         }`}
-                        title={`Earnings ${earn.daysUntil <= 0 ? 'today/just reported' : `in ${earn.daysUntil} day${earn.daysUntil !== 1 ? 's' : ''}`} (${new Date(earn.date + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}${earn.timing ? ' ' + earn.timing : ''})\nConsider position sizing and stop-loss placement`}
+                        title={`Earnings ${earn.daysUntil < 0 ? `${Math.abs(earn.daysUntil)} day${Math.abs(earn.daysUntil) !== 1 ? 's' : ''} ago` : earn.daysUntil === 0 ? 'today' : `in ${earn.daysUntil} day${earn.daysUntil !== 1 ? 's' : ''}`} (${new Date(earn.date + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}${earn.timing ? ' ' + earn.timing : ''})\nConsider position sizing and stop-loss placement`}
                       >
-                        {earn.daysUntil <= 0 ? 'ER today' : `ER ${earn.daysUntil}D`}
+                        {earn.daysUntil < 0 ? `ER ${Math.abs(earn.daysUntil)} Day${Math.abs(earn.daysUntil) !== 1 ? 's' : ''} Ago` : earn.daysUntil === 0 ? 'ER Today' : `ER ${earn.daysUntil}D`}
                       </span>
                     )}
                   </div>
@@ -379,6 +436,9 @@ function HeatmapDrillDown({ theme, tickerPerf, sortBy = 'w1' }) {
                 <td className={`py-1.5 px-2 text-right font-mono font-semibold ${perfCls(d.compositeRS)}`}>
                   {d.compositeRS >= 0 ? '+' : ''}{d.compositeRS.toFixed(2)}
                 </td>
+                <td className="py-1.5 px-2 text-center">
+                  <AccelIndicator value={d.accel} />
+                </td>
               </tr>
             );
           })}
@@ -392,7 +452,7 @@ function HeatmapDrillDown({ theme, tickerPerf, sortBy = 'w1' }) {
                 {fmt(themeAvg[tf.key])}
               </td>
             ))}
-            <td colSpan={4} className="py-1.5 px-2 text-right text-gray-600 italic">theme avg</td>
+            <td colSpan={5} className="py-1.5 px-2 text-right text-gray-600 italic">theme avg</td>
           </tr>
         </tbody>
       </table>

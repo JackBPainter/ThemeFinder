@@ -1,8 +1,7 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
-import { ChevronDown, ChevronUp, Crosshair, Pencil, RotateCcw, RefreshCw } from 'lucide-react';
+import { ChevronDown, ChevronUp, Crosshair, RotateCcw, RefreshCw, AlertTriangle, TrendingUp, TrendingDown, Minus } from 'lucide-react';
 import { runWatchlistPipeline } from '../services/watchlistScoringService';
 
-const ACCOUNT_KEY = 'tf_watchlist_account';
 const COLLAPSE_KEY = 'tf_watchlist_collapsed';
 
 const fmt = (v) => (v == null ? '-' : `${v >= 0 ? '+' : ''}${v.toFixed(2)}%`);
@@ -40,16 +39,39 @@ function getUSMarketPhase() {
   return 'closed';
 }
 
+function AccelIndicator({ value }) {
+  if (value == null) return <span className="text-gray-600">—</span>;
+  let Icon, cls, label;
+  if (value > 0.05) {
+    Icon = TrendingUp; cls = 'text-green-400 font-semibold'; label = 'Momentum accelerating strongly';
+  } else if (value > 0.01) {
+    Icon = TrendingUp; cls = 'text-green-500'; label = 'Momentum accelerating';
+  } else if (value < -0.05) {
+    Icon = TrendingDown; cls = 'text-red-400 font-semibold'; label = 'Momentum decelerating sharply';
+  } else if (value < -0.01) {
+    Icon = TrendingDown; cls = 'text-orange-400'; label = 'Momentum decelerating';
+  } else {
+    Icon = Minus; cls = 'text-gray-500'; label = 'Momentum steady';
+  }
+  return (
+    <span className={`inline-flex items-center gap-0.5 ${cls}`} title={label}>
+      <Icon size={13} />
+      <span className="text-[10px] font-mono">
+        {value > 0 ? '+' : ''}{value.toFixed(2)}
+      </span>
+    </span>
+  );
+}
+
 function DailyWatchlist() {
   const [items, setItems] = useState([]);
+  const [filteredThemes, setFilteredThemes] = useState([]);
   const [loading, setLoading] = useState(true);
   const [progress, setProgress] = useState(null);
   const [error, setError] = useState(null);
 
   const [collapsed, setCollapsed] = useState(() => localStorage.getItem(COLLAPSE_KEY) === 'true');
-  const [accountStr, setAccountStr] = useState(() => localStorage.getItem(ACCOUNT_KEY) || '50000');
-  const [editingAccount, setEditingAccount] = useState(false);
-  const [accountDraft, setAccountDraft] = useState('');
+  const [mapType, setMapType] = useState('themes'); // 'themes' | 'sectors'
 
   const [sortCol, setSortCol] = useState('score');
   const [sortAsc, setSortAsc] = useState(false);
@@ -59,7 +81,6 @@ function DailyWatchlist() {
   const [editingCell, setEditingCell] = useState(null); // { ticker, field }
   const [editDraft, setEditDraft] = useState('');
 
-  const account = parseFloat(accountStr) || 50000;
   const marketOpen = getUSMarketPhase() === 'open';
 
   // Persist collapse state
@@ -80,6 +101,7 @@ function DailyWatchlist() {
       .then((result) => {
         if (!cancelled) {
           setItems(result.items);
+          setFilteredThemes(result.filtered || []);
           setLoading(false);
         }
       })
@@ -98,21 +120,6 @@ function DailyWatchlist() {
     const cancel = refresh();
     return cancel;
   }, [refresh]);
-
-  // Account editing
-  const startEditAccount = useCallback(() => {
-    setAccountDraft(accountStr);
-    setEditingAccount(true);
-  }, [accountStr]);
-
-  const commitAccount = useCallback(() => {
-    const v = parseFloat(accountDraft);
-    if (v > 0) {
-      setAccountStr(String(v));
-      localStorage.setItem(ACCOUNT_KEY, String(v));
-    }
-    setEditingAccount(false);
-  }, [accountDraft]);
 
   // Cell editing
   const startEdit = useCallback((ticker, field, currentValue) => {
@@ -163,6 +170,7 @@ function DailyWatchlist() {
       if (sortCol === 'score') { va = a.watchlistScore; vb = b.watchlistScore; }
       else if (sortCol === 'rs') { va = a.rsComposite; vb = b.rsComposite; }
       else if (sortCol === 'rvol') { va = a.rvol; vb = b.rvol; }
+      else if (sortCol === '1d') { va = a.perf1D ?? -999; vb = b.perf1D ?? -999; }
       else if (sortCol === '1w') { va = a.perf1W ?? -999; vb = b.perf1W ?? -999; }
       else if (sortCol === 'theme') { return a.themeName.localeCompare(b.themeName) * (sortAsc ? 1 : -1); }
       else return 0;
@@ -173,12 +181,13 @@ function DailyWatchlist() {
 
   const themeCount = useMemo(() => new Set(items.map((i) => i.themeName)).size, [items]);
 
-  const SortHeader = ({ col, children, className = '' }) => {
+  const SortHeader = ({ col, children, className = '', title }) => {
     const active = sortCol === col;
     return (
       <th
-        className={`py-2 px-2 cursor-pointer select-none whitespace-nowrap transition-colors hover:text-gray-200 ${active ? 'text-gray-200' : 'text-gray-500'} ${className}`}
+        className={`py-2 px-2 cursor-pointer select-none whitespace-nowrap transition-colors hover:text-gray-200 ${active ? 'text-gray-200' : 'text-gray-500'} ${title ? 'cursor-help' : ''} ${className}`}
         onClick={() => toggleSort(col)}
+        title={title}
       >
         <span className="inline-flex items-center gap-0.5">
           {children}
@@ -234,17 +243,6 @@ function DailyWatchlist() {
     );
   };
 
-  // Compute shares/risk for display
-  const computePosition = (item) => {
-    const entry = getVal(item, 'entry');
-    const stop = getVal(item, 'stopLoss');
-    const riskPerShare = Math.abs(entry - stop);
-    if (riskPerShare <= 0) return { shares: 0, dollarRisk: 0 };
-    const dollarRisk = account * item.riskPct;
-    const shares = Math.floor(dollarRisk / riskPerShare);
-    return { shares, dollarRisk: shares * riskPerShare };
-  };
-
   return (
     <div className="bg-secondary/40 rounded-xl border border-accent/40 overflow-hidden">
       {/* Header */}
@@ -272,32 +270,6 @@ function DailyWatchlist() {
           )}
         </div>
         <div className="flex items-center gap-4">
-          {/* Account */}
-          {!collapsed && (
-            <div className="flex items-center gap-1.5 text-xs text-gray-400" onClick={(e) => e.stopPropagation()}>
-              <span>Account:</span>
-              {editingAccount ? (
-                <input
-                  type="text"
-                  inputMode="numeric"
-                  autoFocus
-                  value={accountDraft}
-                  onChange={(e) => setAccountDraft(e.target.value)}
-                  onBlur={commitAccount}
-                  onKeyDown={(e) => { if (e.key === 'Enter') commitAccount(); if (e.key === 'Escape') setEditingAccount(false); }}
-                  className="w-24 bg-accent/30 border border-accent rounded px-1.5 py-0.5 text-xs font-mono text-white focus:outline-none focus:border-blue-500/50"
-                />
-              ) : (
-                <button
-                  onClick={startEditAccount}
-                  className="inline-flex items-center gap-1 font-mono text-gray-300 hover:text-white transition-colors"
-                >
-                  ${parseFloat(accountStr).toLocaleString()}
-                  <Pencil size={10} className="text-gray-600" />
-                </button>
-              )}
-            </div>
-          )}
           {!collapsed && (
             <button
               onClick={(e) => { e.stopPropagation(); if (!loading) refresh(); }}
@@ -347,23 +319,23 @@ function DailyWatchlist() {
                     <th className="py-2 px-2 text-left text-gray-500 w-5">#</th>
                     <th className="py-2 px-2 text-left text-gray-500">Ticker</th>
                     <SortHeader col="theme" className="text-left">Theme</SortHeader>
-                    <SortHeader col="score" className="text-right">Score</SortHeader>
-                    <SortHeader col="rs" className="text-right">RS</SortHeader>
-                    <SortHeader col="rvol" className="text-right">RVOL</SortHeader>
+                    <SortHeader col="score" className="text-right" title="Overall conviction score (0–100). Combines how strong the stock is vs the market, how much volume interest it has, and whether its theme is gaining momentum. Higher = better setup.">Score</SortHeader>
+                    <SortHeader col="rs" className="text-right" title="Relative Strength — how much this stock is outperforming or underperforming the S&P 500 over recent weeks. Positive = beating the market.">RS</SortHeader>
+                    <SortHeader col="rvol" className="text-right" title="Relative Volume — how much more (or less) this stock is trading today compared to its usual daily volume. Above 1.0x = busier than normal.">RVOL</SortHeader>
+                    <SortHeader col="1d" className="text-right">1D %</SortHeader>
                     <SortHeader col="1w" className="text-right">1W %</SortHeader>
+                    <th className="py-2 px-2 text-center text-gray-500 cursor-help" title="Stock momentum acceleration — whether this stock's rank within its theme is improving or worsening from longer to shorter timeframes.">Accel</th>
                     {marketOpen && <>
                       <th className="py-2 px-2 text-right text-gray-500">Entry</th>
                       <th className="py-2 px-2 text-right text-gray-500">Stop</th>
-                      <th className="py-2 px-2 text-right text-gray-500">T1</th>
-                      <th className="py-2 px-2 text-right text-gray-500 hidden md:table-cell">T2</th>
-                      <th className="py-2 px-2 text-right text-gray-500 hidden md:table-cell">Shares</th>
-                      <th className="py-2 px-2 text-right text-gray-500 hidden md:table-cell">$ Risk</th>
+                      <th className="py-2 px-2 text-right text-gray-500 cursor-help" title="First take-profit target — the price where you'd consider selling part of your position. Click to edit.">T1</th>
+                      <th className="py-2 px-2 text-right text-gray-500 hidden md:table-cell cursor-help" title="Second take-profit target — a higher price for selling the remaining position. Click to edit.">T2</th>
+                      <th className="py-2 px-2 text-right text-gray-500 hidden md:table-cell">% Risk</th>
                     </>}
                   </tr>
                 </thead>
                 <tbody>
                   {sortedItems.map((item, i) => {
-                    const pos = computePosition(item);
                     return (
                       <tr key={item.ticker} className="border-b border-accent/10 hover:bg-accent/10 transition-colors">
                         <td className="py-1.5 px-2 text-gray-600 font-mono">{i + 1}</td>
@@ -386,21 +358,35 @@ function DailyWatchlist() {
                             {item.themeTier}
                           </span>
                         </td>
-                        <td className={`py-1.5 px-2 text-right font-mono ${scoreCls(item.watchlistScore)}`}>
+                        <td
+                          className={`py-1.5 px-2 text-right font-mono cursor-help ${scoreCls(item.watchlistScore)}`}
+                          title={`Conviction score based on strength vs market (RS: ${item.rsComposite}), volume interest (RVOL: ${item.rvol.toFixed(1)}x), and theme momentum.`}
+                        >
                           {item.watchlistScore.toFixed(1)}
                         </td>
-                        <td className={`py-1.5 px-2 text-right font-mono ${perfCls(item.rsComposite)}`}>
+                        <td
+                          className={`py-1.5 px-2 text-right font-mono cursor-help ${perfCls(item.rsComposite)}`}
+                          title={`RS: ${item.rsComposite} — ${item.rsComposite > 0 ? 'outperforming' : item.rsComposite < 0 ? 'underperforming' : 'in line with'} the S&P 500 over recent weeks.`}
+                        >
                           {item.rsComposite}
                         </td>
-                        <td className={`py-1.5 px-2 text-right font-mono ${
+                        <td className={`py-1.5 px-2 text-right font-mono cursor-help ${
                           item.rvol >= 3 ? 'text-yellow-400 font-semibold' :
                           item.rvol >= 2 ? 'text-green-400' :
                           item.rvol >= 1.5 ? 'text-green-500' : 'text-gray-500'
-                        }`}>
+                        }`}
+                          title={`RVOL: ${item.rvol.toFixed(2)}x — ${item.rvol >= 2 ? 'much busier' : item.rvol >= 1.5 ? 'busier' : item.rvol >= 1 ? 'about average' : 'quieter'} than a typical day.`}
+                        >
                           {item.rvol.toFixed(1)}x
+                        </td>
+                        <td className={`py-1.5 px-2 text-right font-mono ${perfCls(item.perf1D)}`}>
+                          {fmt(item.perf1D)}
                         </td>
                         <td className={`py-1.5 px-2 text-right font-mono ${perfCls(item.perf1W)}`}>
                           {fmt(item.perf1W)}
+                        </td>
+                        <td className="py-1.5 px-2 text-center">
+                          <AccelIndicator value={item.stockAccel} />
                         </td>
                         {marketOpen && <>
                           <EditableCell item={item} field="entry" />
@@ -413,11 +399,8 @@ function DailyWatchlist() {
                               ${getVal(item, 'target2').toFixed(2)}
                             </span>
                           </td>
-                          <td className="py-1.5 px-2 text-right font-mono text-gray-400 hidden md:table-cell">
-                            {pos.shares.toLocaleString()}
-                          </td>
-                          <td className="py-1.5 px-2 text-right font-mono text-red-400 hidden md:table-cell">
-                            ${pos.dollarRisk.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
+                          <td className="py-1.5 px-2 text-right font-mono text-amber-400 hidden md:table-cell">
+                            {(item.riskPct * 100).toFixed(1)}%
                           </td>
                         </>}
                       </tr>
@@ -425,6 +408,47 @@ function DailyWatchlist() {
                   })}
                 </tbody>
               </table>
+            </div>
+          )}
+
+          {/* Filtered themes explanation */}
+          {!loading && !error && filteredThemes.length > 0 && (
+            <div className="mt-3 border-t border-accent/20 pt-3">
+              <div className="flex items-center gap-1.5 mb-2">
+                <AlertTriangle size={12} className="text-amber-500/70" />
+                <span className="text-[11px] text-gray-500 font-medium">
+                  {filteredThemes.length} top-10 theme{filteredThemes.length !== 1 ? 's' : ''} excluded
+                </span>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {filteredThemes.map((t) => (
+                  <a
+                    key={t.rank}
+                    href={`?view=themes&theme=${encodeURIComponent(t.id)}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1.5 text-[10px] bg-accent/15 rounded px-2 py-1 border border-accent/20 hover:bg-accent/30 hover:border-accent/40 transition-colors cursor-pointer no-underline"
+                    title={`Rank #${t.rank} — ${t.name}\nAccel: ${t.accel != null ? t.accel.toFixed(3) : 'N/A'}\n1W: ${t.perf1W != null ? t.perf1W.toFixed(2) + '%' : 'N/A'}\nTickers: ${t.tickers}`}
+                  >
+                    <span className="text-gray-500 font-mono">#{t.rank}</span>
+                    <span className="text-gray-400">{t.name}</span>
+                    <span className="text-gray-600">—</span>
+                    {t.reasons.map((r) => (
+                      <span
+                        key={r}
+                        className={`px-1 py-0.5 rounded text-[9px] font-medium ${
+                          r === 'Decelerating' ? 'bg-red-500/15 text-red-400' :
+                          r === 'Overextended' ? 'bg-orange-500/15 text-orange-400' :
+                          r === 'Blow-off top risk' ? 'bg-red-500/15 text-red-400' :
+                          'bg-amber-500/15 text-amber-400'
+                        }`}
+                      >
+                        {r}
+                      </span>
+                    ))}
+                  </a>
+                ))}
+              </div>
             </div>
           )}
         </div>

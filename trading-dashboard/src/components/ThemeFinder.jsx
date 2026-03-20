@@ -467,13 +467,44 @@ function StockDrillDown({ theme, tickerPerf, sortBy }) {
     w13: { ...(tickerPerf.w13 ?? {}), ...Object.fromEntries(Object.entries(extraPerf).map(([t, p]) => [t, tickerPerf.w13?.[t] ?? p?.w13 ?? 0])) },
   };
 
+  // Build per-ticker perf map for ranking
+  const allTickerPerfs = theme.tickers.map((ticker) => ({
+    ticker,
+    perfs: getPerfForTicker(ticker),
+  }));
+
+  // Rank tickers within this theme per timeframe (rank 1 = best perf)
+  const rankByTf = {};
+  for (const tf of TIMEFRAMES) {
+    const sorted = [...allTickerPerfs]
+      .filter((t) => t.perfs[tf.key] != null)
+      .sort((a, b) => b.perfs[tf.key] - a.perfs[tf.key]);
+    rankByTf[tf.key] = {};
+    sorted.forEach((t, i) => { rankByTf[tf.key][t.ticker] = i + 1; });
+  }
+  const total = theme.tickers.length;
+
+  // Timeframes longest → shortest for accel slope
+  const tfsLongFirst = [...TIMEFRAMES].reverse();
+
   const tickerData = theme.tickers
     .map((ticker) => {
       const perfs = getPerfForTicker(ticker);
       const spyPerf = tickerPerf[sortBy]?.['SPY'] ?? 0;
       const rsVsSpy = perfs[sortBy] != null ? perfs[sortBy] - spyPerf : null;
       const compositeRS = computeCompositeRS(ticker, mergedForRS);
-      return { ticker, perfs, rsVsSpy, compositeRS };
+
+      // Stock acceleration — slope of rank from longest to shortest
+      let accel = null;
+      const accelRanks = tfsLongFirst
+        .map((tf) => rankByTf[tf.key]?.[ticker])
+        .filter((v) => v != null);
+      if (accelRanks.length >= 2 && total > 1) {
+        const slope = (accelRanks[0] - accelRanks[accelRanks.length - 1]) / (accelRanks.length - 1);
+        accel = Math.round((slope / total) * 100) / 100;
+      }
+
+      return { ticker, perfs, rsVsSpy, compositeRS, accel };
     })
     .sort((a, b) => b.compositeRS - a.compositeRS);
 
@@ -515,6 +546,10 @@ function StockDrillDown({ theme, tickerPerf, sortBy }) {
               className="text-right py-1.5 px-2 text-purple-400 whitespace-nowrap cursor-help"
               title="Composite Relative Strength — weighted score: (1W × 3 + 1M × 2 + 3M × 1) minus the same for SPY. Higher = stronger momentum vs market."
             >Comp RS</th>
+            <th
+              className="text-center py-1.5 px-2 whitespace-nowrap cursor-help"
+              title="Stock momentum acceleration — whether this stock's rank within the theme is improving (↗) or worsening (↘) from longer to shorter timeframes."
+            >Accel</th>
           </tr>
         </thead>
         <tbody>
@@ -553,9 +588,9 @@ function StockDrillDown({ theme, tickerPerf, sortBy }) {
                             ? 'bg-yellow-900/30 text-yellow-400'
                             : 'bg-gray-800/40 text-gray-400'
                         }`}
-                        title={`Earnings ${earn.daysUntil <= 0 ? 'today/just reported' : `in ${earn.daysUntil} day${earn.daysUntil !== 1 ? 's' : ''}`} (${new Date(earn.date + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}${earn.timing ? ' ' + earn.timing : ''})\nConsider position sizing and stop-loss placement`}
+                        title={`Earnings ${earn.daysUntil < 0 ? `${Math.abs(earn.daysUntil)} day${Math.abs(earn.daysUntil) !== 1 ? 's' : ''} ago` : earn.daysUntil === 0 ? 'today' : `in ${earn.daysUntil} day${earn.daysUntil !== 1 ? 's' : ''}`} (${new Date(earn.date + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}${earn.timing ? ' ' + earn.timing : ''})\nConsider position sizing and stop-loss placement`}
                       >
-                        {earn.daysUntil <= 0 ? 'ER today' : `ER ${earn.daysUntil}D`}
+                        {earn.daysUntil < 0 ? `ER ${Math.abs(earn.daysUntil)} Day${Math.abs(earn.daysUntil) !== 1 ? 's' : ''} Ago` : earn.daysUntil === 0 ? 'ER Today' : `ER ${earn.daysUntil}D`}
                       </span>
                     )}
                   </div>
@@ -616,6 +651,9 @@ function StockDrillDown({ theme, tickerPerf, sortBy }) {
                 }`}>
                   {d.compositeRS >= 0 ? '+' : ''}{d.compositeRS.toFixed(2)}
                 </td>
+                <td className="py-1.5 px-2 text-center">
+                  <AccelIndicator value={d.accel} />
+                </td>
               </tr>
             );
           })}
@@ -629,7 +667,7 @@ function StockDrillDown({ theme, tickerPerf, sortBy }) {
                 {fmt(themeAvg[tf.key])}
               </td>
             ))}
-            <td colSpan={4} className="py-1.5 px-2 text-right text-gray-600 italic">theme avg</td>
+            <td colSpan={5} className="py-1.5 px-2 text-right text-gray-600 italic">theme avg</td>
           </tr>
         </tbody>
       </table>
@@ -710,7 +748,7 @@ function LeadingCells({ rank, theme, expanded = false, onExpand = () => {} }) {
   );
 }
 
-const ThemeFinder = ({ mode = 'themes' }) => {
+const ThemeFinder = ({ mode = 'themes', initialExpandThemeId = null }) => {
   const noun = mode === 'sectors' ? 'sector' : 'theme';
   const Noun = mode === 'sectors' ? 'Sector' : 'Theme';
   const [themes, setThemes] = useState([]);
@@ -779,6 +817,22 @@ const ThemeFinder = ({ mode = 'themes' }) => {
   useEffect(() => {
     setExpandedThemeId(null);
   }, [mode]);
+
+  // Auto-expand a theme if linked from watchlist
+  useEffect(() => {
+    if (initialExpandThemeId && themes.length > 0) {
+      const match = themes.find((t) => t.id === initialExpandThemeId);
+      if (match) {
+        setActiveTab('momentum');
+        setExpandedThemeId(match.id);
+        // Scroll to it after a tick
+        setTimeout(() => {
+          const el = document.querySelector(`[data-theme-id="${match.id}"]`);
+          if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }, 200);
+      }
+    }
+  }, [initialExpandThemeId, themes]);
 
 
 
@@ -1129,7 +1183,11 @@ const ThemeFinder = ({ mode = 'themes' }) => {
               <table className="w-full text-sm">
                 <thead>
                   <tr className="text-gray-400 border-b border-accent sticky top-0 bg-primary z-10">
-                    <th className="text-left py-2 pr-3 w-8">#</th>
+                    <th
+                      className={`text-left py-2 pr-3 w-8 cursor-pointer transition-colors ${momentumSortBy === 'rank' ? 'text-purple-400' : 'text-gray-400 hover:text-purple-400'}`}
+                      onClick={() => setMomentumSortBy('rank')}
+                      title="Sort by weighted momentum rank"
+                    >#</th>
                     <th className="text-left py-2 pr-4">{Noun}</th>
                     <th className="text-left py-2 pr-4 hidden md:table-cell">Description</th>
                     <th className="text-left py-2 pr-4 hidden lg:table-cell">Trend</th>
@@ -1138,11 +1196,6 @@ const ThemeFinder = ({ mode = 'themes' }) => {
                       onClick={() => setMomentumSortBy('accel')}
                       title="Momentum acceleration — measures whether rank is improving (↗) or worsening (↘) from longer to shorter timeframes. Positive = accelerating, negative = decelerating."
                     >Accel{momentumSortBy === 'accel' ? ' ▼' : ''}</th>
-                    <th
-                      className={`text-right py-2 px-3 cursor-pointer transition-colors ${momentumSortBy === 'rank' ? 'text-purple-400' : 'text-gray-400 hover:text-purple-400'}`}
-                      onClick={() => setMomentumSortBy('rank')}
-                      title="Weighted average rank across the active preset's timeframes. Lower = stronger momentum. Each timeframe's rank is multiplied by its weight before averaging."
-                    >Rank{momentumSortBy === 'rank' ? ' ▼' : ''}</th>
                     <th
                       className={`text-right py-2 px-3 cursor-pointer transition-colors ${momentumSortBy === 'perf' ? 'text-white' : 'text-gray-400 hover:text-white'}`}
                       onClick={() => setMomentumSortBy('perf')}
@@ -1166,7 +1219,7 @@ const ThemeFinder = ({ mode = 'themes' }) => {
                     const strongDecel = theme.mtmAccel != null && theme.mtmAccel < -0.05;
                     return (
                       <Fragment key={theme.id}>
-                        <tr className={`border-b border-accent/20 hover:bg-secondary/50 transition-colors ${
+                        <tr data-theme-id={theme.id} className={`border-b border-accent/20 hover:bg-secondary/50 transition-colors ${
                           expandedThemeId === theme.id ? 'bg-secondary/40' : ''
                         } ${isTop5 ? 'border-l-2 border-l-purple-500' : ''
                         } ${strongAccel ? 'bg-green-900/10' : strongDecel ? 'bg-red-900/10' : ''}`}>
@@ -1181,9 +1234,6 @@ const ThemeFinder = ({ mode = 'themes' }) => {
                           </td>
                           <td className="py-3 px-2 text-center">
                             <AccelIndicator value={theme.mtmAccel} />
-                          </td>
-                          <td className="py-3 px-3 text-right font-mono text-xs text-purple-400 font-semibold">
-                            {ordinal(Math.round(theme.mtmRankScore))}
                           </td>
                           <td className={`py-3 px-3 text-right font-mono text-xs ${perfCls(theme.mtmPerfScore)}`}>
                             {theme.mtmPerfScore != null ? fmt(theme.mtmPerfScore) : '-'}

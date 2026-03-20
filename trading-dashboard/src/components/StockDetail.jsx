@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { ArrowLeft, ExternalLink } from 'lucide-react';
+import { ArrowLeft, ExternalLink, Calculator } from 'lucide-react';
 import { getStockPerformance } from '../services/yahooFinanceApi';
 import { fetchFinvizSnapshot } from '../services/earningsService';
 
@@ -30,7 +30,7 @@ function StockDetail({ ticker, onBack }) {
   const [earnings, setEarnings] = useState(null);
   const [loading, setLoading] = useState(true);
   const containerRef = useRef(null);
-  const containerId = useRef(`tv_stock_${++tvInstanceCount}`);
+  const [containerId] = useState(() => `tv_stock_${++tvInstanceCount}`);
   const tvInit = useRef(false);
 
   // Fetch performance + earnings
@@ -71,7 +71,7 @@ function StockDetail({ ticker, onBack }) {
   // Init TradingView chart
   useEffect(() => {
     if (tvInit.current || !containerRef.current || !window.TradingView) return;
-    if (!document.getElementById(containerId.current)) return;
+    if (!document.getElementById(containerId)) return;
     tvInit.current = true;
 
     new window.TradingView.widget({
@@ -86,7 +86,7 @@ function StockDetail({ ticker, onBack }) {
       enable_publishing: false,
       hide_side_toolbar: false,
       allow_symbol_change: true,
-      container_id: containerId.current,
+      container_id: containerId,
       loading_screen: { backgroundColor: '#1a1a2e' },
       overrides: {
         'mainSeriesProperties.candleStyle.upColor': '#00d084',
@@ -125,9 +125,9 @@ function StockDetail({ ticker, onBack }) {
                   ? 'bg-yellow-900/30 text-yellow-400'
                   : 'bg-gray-800/40 text-gray-400'
               }`}
-              title={`Earnings ${earnings.daysUntil <= 0 ? 'today/just reported' : `in ${earnings.daysUntil} day${earnings.daysUntil !== 1 ? 's' : ''}`} (${new Date(earnings.date + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}${earnings.timing ? ' ' + earnings.timing : ''})`}
+              title={`Earnings ${earnings.daysUntil < 0 ? `${Math.abs(earnings.daysUntil)} day${Math.abs(earnings.daysUntil) !== 1 ? 's' : ''} ago` : earnings.daysUntil === 0 ? 'today' : `in ${earnings.daysUntil} day${earnings.daysUntil !== 1 ? 's' : ''}`} (${new Date(earnings.date + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}${earnings.timing ? ' ' + earnings.timing : ''})`}
             >
-              {earnings.daysUntil <= 0 ? 'ER today' : `ER ${earnings.daysUntil}D`}
+              {earnings.daysUntil < 0 ? `ER ${Math.abs(earnings.daysUntil)} Day${Math.abs(earnings.daysUntil) !== 1 ? 's' : ''} Ago` : earnings.daysUntil === 0 ? 'ER Today' : `ER ${earnings.daysUntil}D`}
             </span>
           )}
           <a
@@ -138,15 +138,25 @@ function StockDetail({ ticker, onBack }) {
           >
             TradingView <ExternalLink size={11} />
           </a>
+          {perf?.price != null && (
+            <a
+              href={`?view=positionSizer&ticker=${encodeURIComponent(ticker)}&entry=${perf.price.toFixed(2)}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-xs text-gray-500 hover:text-gray-300 transition-colors flex items-center gap-1 ml-1"
+            >
+              <Calculator size={11} /> Position Calc
+            </a>
+          )}
         </div>
       </header>
 
       {/* TradingView Chart */}
       <div className="p-4 pb-0">
-        <div className="bg-primary rounded-lg overflow-hidden border border-accent" style={{ height: '500px' }}>
+        <div key={ticker} className="bg-primary rounded-lg overflow-hidden border border-accent" style={{ height: '500px' }}>
           <div
             ref={containerRef}
-            id={containerId.current}
+            id={containerId}
             className="w-full h-full"
           />
         </div>

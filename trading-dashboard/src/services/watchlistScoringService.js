@@ -27,13 +27,14 @@ const WIDE_STOP_SECTORS = ['biotechnology', 'drug_manufacturers', 'semiconductor
 // Finviz data fetching (same pattern as ThemeFinder)
 // ---------------------------------------------------------------------------
 
-async function fetchDefinitions() {
-  const mapRes = await fetch(`${FINVIZ_BASE}/map.ashx?t=themes`);
+async function fetchDefinitions(mapType = 'themes') {
+  const t = mapType === 'sectors' ? 'sec' : 'themes';
+  const mapRes = await fetch(`${FINVIZ_BASE}/map.ashx?t=${t}`);
   if (!mapRes.ok) throw new Error(`Finviz map page returned ${mapRes.status}`);
   const mapHtml = await mapRes.text();
 
-  const chunkMatch = mapHtml.match(/href="(\/assets\/dist\/map_base_themes[^"]+\.js)"/);
-  if (!chunkMatch) throw new Error('Could not locate themes data chunk');
+  const chunkMatch = mapHtml.match(new RegExp(`href="(/assets/dist/map_base_${t}[^"]+\\.js)"`));
+  if (!chunkMatch) throw new Error(`Could not locate ${mapType} data chunk`);
 
   const chunkRes = await fetch(`${FINVIZ_BASE}${chunkMatch[1]}`);
   if (!chunkRes.ok) throw new Error('Could not load themes definitions chunk');
@@ -151,37 +152,45 @@ function scoreThemes(themes, perfByKey) {
     [...reversalData].sort((a, b) => b.divergence - a.divergence).slice(0, 10).map((r) => r.id)
   );
 
-  // Filter: top 10, acceleration > 0.01, 1W > 3%, >= 5 liquid tickers
+  // Filter: top 10, acceleration > 0, 1W > 1%, >= 5 liquid tickers
   const qualifying = [];
+  const filtered = []; // tracks why top-10 themes were excluded
   for (let i = 0; i < Math.min(ranked.length, 10); i++) {
     const t = ranked[i];
     const rank = i + 1;
 
-    // Must have positive acceleration
-    if ((t.mtmAccel ?? 0) <= 0) continue;
+    // Collect exclusion reasons (relaxed thresholds)
+    const reasons = [];
+    if ((t.mtmAccel ?? 0) <= -0.01) reasons.push('Decelerating');
+    if ((t.perf.w1 ?? 0) <= 0) reasons.push('1W perf ≤ 0%');
+    if (t.tickers.length < 3) reasons.push('< 3 tickers');
+    if ((t.perf.d1 ?? 0) > 15 && (t.perf.w1 ?? 0) < 5) reasons.push('Blow-off top risk');
+    if (overextendedIds.has(t.id)) reasons.push('Overextended');
 
-    // 1W perf > 1% (relaxed from 3% to avoid empty list in choppy markets)
-    if ((t.perf.w1 ?? 0) <= 1) continue;
+    if (reasons.length > 0) {
+      filtered.push({
+        rank,
+        id: t.id,
+        name: t.displayName,
+        accel: t.mtmAccel,
+        perf1W: t.perf.w1,
+        tickers: t.tickers.length,
+        reasons,
+      });
+      continue;
+    }
 
-    // At least 5 tickers
-    if (t.tickers.length < 5) continue;
-
-    // Red-flag: blow-off top
-    if ((t.perf.d1 ?? 0) > 15 && (t.perf.w1 ?? 0) < 5) continue;
-
-    // Red-flag: overextended (in reversals list)
-    if (overextendedIds.has(t.id)) continue;
-
-    // Assign tier
+    // Assign tier — themes with weak/negative acceleration cap at B
     let tier;
-    if (rank <= 3 && (t.mtmAccel ?? 0) >= 0.02) tier = 'A';
-    else if (rank <= 7) tier = 'B';
+    const accel = t.mtmAccel ?? 0;
+    if (rank <= 3 && accel >= 0.02) tier = 'A';
+    else if (rank <= 7 && accel > 0) tier = 'B';
     else tier = 'C';
 
     qualifying.push({ ...t, themeRank: rank, themeTier: tier });
   }
 
-  return { qualifying, perfByKey, rankByTf };
+  return { qualifying, filtered, perfByKey, rankByTf };
 }
 
 // ---------------------------------------------------------------------------
@@ -220,14 +229,16 @@ function getRiskPct(tier) {
  * @param {Function} onProgress - called with { phase, loaded, total } during ticker fetch
  * @returns {{ items: Array, loading: boolean }}
  */
-export async function runWatchlistPipeline(onProgress) {
-  // 1. Fetch theme definitions + performance
+export async function runWatchlistPipeline(onProgress, mapType = 'themes') {
+  const primary = mapType === 'sectors' ? 'sec' : 'themes';
+  const secondary = mapType === 'sectors' ? 'themes' : 'sec';
+  // 1. Fetch definitions + performance
   onProgress?.({ phase: 'themes', loaded: 0, total: 0 });
 
-  const defs = await fetchDefinitions();
+  const defs = await fetchDefinitions(mapType);
   const [perfResults, secPerfResults] = await Promise.all([
-    Promise.all(TIMEFRAMES.map((tf) => fetchPerfData(tf.st, 'themes'))),
-    Promise.all(TIMEFRAMES.map((tf) => fetchPerfData(tf.st, 'sec').catch(() => ({})))),
+    Promise.all(TIMEFRAMES.map((tf) => fetchPerfData(tf.st, primary))),
+    Promise.all(TIMEFRAMES.map((tf) => fetchPerfData(tf.st, secondary).catch(() => ({})))),
   ]);
 
   const perfByKey = Object.fromEntries(
@@ -244,9 +255,9 @@ export async function runWatchlistPipeline(onProgress) {
     .filter((t) => TIMEFRAMES.some((tf) => t.perf[tf.key] != null));
 
   // 2. Score and filter themes
-  const { qualifying } = scoreThemes(themes, perfByKey);
+  const { qualifying, filtered } = scoreThemes(themes, perfByKey);
 
-  console.log(`[watchlist] ${themes.length} themes loaded, ${qualifying.length} qualifying`);
+  console.log(`[watchlist] ${themes.length} themes loaded, ${qualifying.length} qualifying, ${filtered.length} filtered out`);
   if (qualifying.length === 0) {
     // Log why themes failed to help debug
     const weights = AGGRESSIVE_WEIGHTS;
@@ -262,7 +273,7 @@ export async function runWatchlistPipeline(onProgress) {
       .sort((a, b) => a.rank - b.rank)
       .slice(0, 5);
     console.log('[watchlist] Top 5 themes by 1W:', ranked);
-    return { items: [], perfByKey };
+    return { items: [], filtered, perfByKey };
   }
 
   // 3. Collect all unique tickers from qualifying themes
@@ -301,15 +312,15 @@ export async function runWatchlistPipeline(onProgress) {
       });
 
       const rvol = perf.relVolume ?? 0;
+      const perf1D = perf.d1 ?? perfByKey.d1?.[ticker] ?? null;
       const perf1W = perf.w1 ?? perfByKey.w1?.[ticker] ?? null;
       const perf1M = perf.w4 ?? perfByKey.w4?.[ticker] ?? null;
 
-      // Step 3 — Disqualification
-      // RS composite is a weighted diff (typically -30 to +30), not 0-100; require positive RS
-      if (rsComposite < 0) continue;
-      if ((perf1M ?? 0) > 30) continue;
-      if (rvol < 1.0) continue;
-      if (perf1W != null && themeInfo.themeAvg1W != null && perf1W < themeInfo.themeAvg1W) continue;
+      // Step 3 — Disqualification (relaxed thresholds)
+      if (rsComposite < -5) continue;       // allow slight SPY underperformance
+      if ((perf1M ?? 0) > 30) continue;     // parabolic extension unchanged
+      if (rvol < 0.8) continue;             // slightly below-average volume OK
+      if (perf1W != null && themeInfo.themeAvg1W != null && perf1W < themeInfo.themeAvg1W * 0.7) continue; // 70% of theme avg instead of 100%
 
       const watchlistScore = scoreStock(ticker, rsComposite, rvol, themeInfo.themeAccel ?? 0);
 
@@ -325,6 +336,7 @@ export async function runWatchlistPipeline(onProgress) {
         themeAccel: themeInfo.themeAccel,
         rsComposite: Math.round(rsComposite),
         rvol,
+        perf1D,
         perf1W,
         perfThemeAvg1W: themeInfo.themeAvg1W,
         watchlistScore: Math.round(watchlistScore * 10) / 10,
@@ -344,9 +356,47 @@ export async function runWatchlistPipeline(onProgress) {
     if (i < allTickers.length - 1) await new Promise((r) => setTimeout(r, 150));
   }
 
-  // Step 4 — Rank & Cap at 10
-  stockResults.sort((a, b) => b.watchlistScore - a.watchlistScore);
-  const items = stockResults.slice(0, 10);
+  // Step 3.5 — Compute per-stock acceleration within each theme
+  // Group stocks by theme, rank within each theme per timeframe, compute slope
+  const byTheme = {};
+  for (const s of stockResults) {
+    (byTheme[s.themeName] ??= []).push(s);
+  }
+  const TF_KEYS_LONG_FIRST = ['w52', 'w26', 'w13', 'w4', 'w1', 'd1'];
+  for (const stocks of Object.values(byTheme)) {
+    // Rank by each timeframe within this theme group
+    const rankByTf = {};
+    for (const tfKey of TF_KEYS_LONG_FIRST) {
+      const sorted = [...stocks]
+        .filter((s) => {
+          const v = tfKey === 'd1' ? s.perf1D : tfKey === 'w1' ? s.perf1W : (perfByKey[tfKey]?.[s.ticker] ?? null);
+          return v != null;
+        })
+        .sort((a, b) => {
+          const av = tfKey === 'd1' ? a.perf1D : tfKey === 'w1' ? a.perf1W : (perfByKey[tfKey]?.[a.ticker] ?? 0);
+          const bv = tfKey === 'd1' ? b.perf1D : tfKey === 'w1' ? b.perf1W : (perfByKey[tfKey]?.[b.ticker] ?? 0);
+          return bv - av;
+        });
+      rankByTf[tfKey] = {};
+      sorted.forEach((s, i) => { rankByTf[tfKey][s.ticker] = i + 1; });
+    }
+    const total = stocks.length;
+    for (const s of stocks) {
+      const accelRanks = TF_KEYS_LONG_FIRST
+        .map((tf) => rankByTf[tf]?.[s.ticker])
+        .filter((v) => v != null);
+      if (accelRanks.length >= 2 && total > 1) {
+        const slope = (accelRanks[0] - accelRanks[accelRanks.length - 1]) / (accelRanks.length - 1);
+        s.stockAccel = Math.round((slope / total) * 100) / 100;
+      } else {
+        s.stockAccel = null;
+      }
+    }
+  }
 
-  return { items, perfByKey };
+  // Step 4 — Filter by minimum score, rank & cap at 10
+  stockResults.sort((a, b) => b.watchlistScore - a.watchlistScore);
+  const items = stockResults.filter((s) => s.watchlistScore >= 65).slice(0, 10);
+
+  return { items, filtered, perfByKey };
 }

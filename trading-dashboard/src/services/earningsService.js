@@ -58,7 +58,7 @@ function parseEarnings(html) {
   const earningsDate = new Date(year, month, day);
   const daysUntil = Math.ceil((earningsDate.getTime() - now.getTime()) / (24 * 60 * 60 * 1000));
 
-  if (daysUntil < -3) return null;
+  if (daysUntil < -5) return null;
 
   return {
     date: earningsDate.toISOString().slice(0, 10),
